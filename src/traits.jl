@@ -147,7 +147,7 @@ function recursionPostOrder(net::HybridNetwork,
     # Find numbers of internal nodes
     nNodes = [n.number for n in net.node]
     nleaf = [n.number for n in net.leaf]
-    deleteat!(nNodes, indexin(nleaf, nNodes))
+    deleteat!(nNodes, sort(indexin(nleaf, nNodes)))
     MatrixTopologicalOrder(M, [n.number for n in net.nodes_changed], nNodes, nleaf, [n.name for n in net.leaf], indexation)
 end
 
@@ -353,6 +353,98 @@ function vcv(net::HybridNetwork;
     Cd = convert(DataFrame, C)
     names!(Cd, map(Symbol, V.tipNames))
     return(Cd)
+end
+
+function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
+    pts=parentTrees(net;resetNodes=false) 
+
+    
+
+
+    tipnums=(x->x.number).(net.leaf)
+    
+    edgenums=(x->x.number).(net.edge)
+    edgelengths=(x->x.length).(net.edge)
+    edgelen_dict=Dict(edgenums .=> edgelengths)
+
+    nummaps=Dict{Int64,Int64}[]
+    pt_descs=MatrixTopologicalOrder[]
+    for p in pts ##For each parent tree...
+        
+        ##reset the node numbers and track the old to new number mappings
+        oldnum= (x->x.number).(p.leaf)
+        resetNodeNumbers!(p)
+        newnum= (x->x.number).(p.leaf)
+        oldnewmap=Dict(oldnum .=> newnum)
+        push!(nummaps,oldnewmap)
+        
+        ##create descendence matrix for each parent tree and set nonzero values to 1
+        d=descendenceMatrix(p)
+        d.V[d.V .> 0] .= 1
+        push!(pt_descs,d)
+    end
+
+    vcv=zeros(length(tipnums),length(tipnums))
+
+    e_cntrbtns=Dict{Int64,Dict{Int64,Float64}}()
+
+    
+    ##Compute edge contributions for each tip
+    for i in 1:length(tipnums)
+        t=tipnums[i] 
+        
+        edgeweights=Dict(edgenums.=>0.0)
+        for p in 1:length(pts) ##Get the contribution of the edges by each parent tree 
+            desc=pt_descs[p]
+            pt=pts[p]
+            weight=weights[p]
+            oldnewmap=nummaps[p]
+
+            tip=oldnewmap[t]
+
+            tip_ind=findfirst(x->x==tip, desc.tipNumbers) ##get row index of the tip we're interested in
+            r1=Bool.(desc[:Tips][tip_ind,:]) ##get the row
+                
+            node_nos=desc.nodeNumbersTopOrder[r1]
+            for n in pt.node 
+                if n.number in node_nos ##If the node number is in our list then we want to add weight to the parent edge in our edgeweights
+                    pe= getParentEdges(n)
+                    length(pe)==1 && (edgeweights[pe[1].number]+=weight); ## length(pe) should equal 1 at every node except the root
+                end
+            end 
+        end
+
+        for k in keys(edgeweights)
+            edgeweights[k]^=1
+            #edgeweights[k]*=edgelen_dict[k]
+        end
+
+        e_cntrbtns[t]=edgeweights
+    end
+
+    #Now Compute the vcv matrix element by element
+    for i in 1:length(tipnums)
+        tip1=tipnums[i]
+        for j in 1:length(tipnums)
+            tip2=tipnums[j]
+
+            edges=Float64[]
+            for k in edgenums
+                push!(edges,(e_cntrbtns[tip1][k]*e_cntrbtns[tip2][k])*edgelen_dict[k])
+                #push!(edges,min(e_cntrbtns[tip1][k],e_cntrbtns[tip2][k]))
+            end
+
+            vcv[i,j]=sum(edges)
+
+        end
+    end
+
+    tipnames=(x->x.name).(net.leaf)
+    Cd = convert(DataFrame, vcv)
+    names!(Cd, map(Symbol, tipnames))
+
+return Cd
+
 end
 
 
@@ -1519,11 +1611,11 @@ Parameter(s) Estimates:
 Sigma2: 0.00294521
 
 Coefficients:
-──────────────────────────────────────────────────────────────────────────
+──────��───────────────────────────────────────────────────────────────────
              Estimate  Std. Error  t value  Pr(>|t|)  Lower 95%  Upper 95%
 ──────────────────────────────────────────────────────────────────────────
 (Intercept)     4.679    0.330627  14.1519    <1e-31    4.02696    5.33104
-──────────────────────────────────────────────────────────────────────────
+─────────────────��────────────────────────────────────────────────────────
 Log Likelihood: -78.9611507833
 AIC: 161.9223015666
 

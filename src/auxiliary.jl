@@ -419,10 +419,18 @@ Warning: if the root is deleted, the new root is arbitrarily set to the
 first node in the list. This is intentional to save time because this function
 is used frequently in snaq!, which handles semi-directed (unrooted) networks.
 """
-function deleteNode!(net::HybridNetwork, n::Node)
+function deleteNode!(net::HybridNetwork, n::Node;thorough=false::Bool)
     index = 0
     try
-        index = getIndex(n,net);
+        ##Note from Josh
+            ##With the things I'm doing some nodes on a tree may have the same attributes causing getIndex() to return the wrong node
+            ##Seems like using == to compare the nodes gets me the right thing. So I am manually getting the index here using ==. 
+            ##Perhaps a more appropriate place to have a flag for the type of comparison is in the getIndex function itself. TODO 
+        if(!thorough)
+            index = getIndex(n,net);
+        else ##Get the index manually with ==
+            index = findfirst(x -> x===n, net.node)
+        end     
     catch
         error("Node $(n.number) not in network");
     end

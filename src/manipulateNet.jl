@@ -567,6 +567,27 @@ end
     error("node $(n.number) has no minor parent")
 end
 
+function getChildrenEdges(n::Node)
+    child_edges=Edge[]
+    for e in n.edge
+        if n==getParent(e)
+            push!(child_edges,e)
+        end
+    end
+    return child_edges
+end
+
+function getParentEdges(n::Node)
+    parent_edges=Edge[]
+    for e in n.edge
+        if n==getChild(e)
+            push!(parent_edges,e)
+        end
+    end
+    return parent_edges
+end
+
+
 """
     getChildren(node)
 
@@ -594,11 +615,17 @@ The edges' direction needs to be correct before calling preorder!, using directE
 """
 function preorder!(net::HybridNetwork)
     net.isRooted || error("net needs to be rooted for preorder!, run root functions or directEdges!")
-    net.nodes_changed = Node[] # path of nodes in preorder.
+    net.nodes_changed=preorder(net,net.node[net.root])
+    # println("path of nodes is $([n.number for n in net.nodes_changed])")
+end
+
+
+function preorder(net::HybridNetwork,node::Node)
     queue = Node[] # problem with PriorityQueue(): dequeue() takes a
                    # random member if all have the same priority 1.
     net.visited = [false for i = 1:size(net.node,1)];
-    push!(queue,net.node[net.root]) # push root into queue
+    preorderNodes=Node[]
+    push!(queue,node) # push root into queue
     while !isempty(queue)
         #println("at this moment, queue is $([n.number for n in queue])")
         curr = pop!(queue); # deliberate choice over shift! for cladewise order
@@ -606,7 +633,7 @@ function preorder!(net::HybridNetwork)
         # the "curr"ent node may have been already visited: because simple loop (2-cycle)
         !net.visited[currind] || continue
         net.visited[currind] = true # visit curr node
-        push!(net.nodes_changed,curr) #push curr into path
+        push!(preorderNodes,curr) #push curr into path
         for e in curr.edge
             if curr == getParent(e)
                 other = getChild(e)
@@ -624,8 +651,180 @@ function preorder!(net::HybridNetwork)
             end
         end
     end
-    # println("path of nodes is $([n.number for n in net.nodes_changed])")
+    return preorderNodes
 end
+
+function mulTree(net::HybridNetwork)
+    multree=deepcopy(net)
+    levelorder!(multree)
+    multree.nodes_changed=reverse(multree.nodes_changed) 
+    
+    for nd in multree.nodes_changed #raverse the nodes in reverse level order 
+        if(nd.hybrid) ##only worry about hybrid nodes
+            parent_edges= getParentEdges(nd)
+            for e in parent_edges[2:end] ##Delete the edge between the all parents and the hybrid node. Then add a duplicate clade to that parent
+                parent_node=getParent(e)
+
+                net_copy=deepcopy(multree)
+                edge_ind = findfirst(x -> x===e, multree.edge)
+                e_copy=net_copy.edge[edge_ind] ##We want a copy of the edge so we can use use its attributes after we delete the edge
+                nd_copy=getChild(e_copy) ##we want a copy of the tree at this node so we can duplicate the clade and add it where nessecary
+                clade_nodes=preorder(net_copy,nd_copy) 
+                
+                deleteHybridEdge!(multree,e,true)
+                
+                clade_edges=Edge[]
+                clade_leaves=Node[]
+                for clade_nd in clade_nodes
+                    append!(clade_edges,getChildrenEdges(clade_nd))
+                    clade_nd.leaf && push!(clade_leaves,clade_nd)
+                end
+
+                ##Attatch the copied clade to the tree by using our copied edge we made earlier
+                e_copy.node=[nd_copy,parent_node]
+                e_copy.isChild1=true
+                push!(parent_node.edge,e_copy)
+                push!(clade_edges,e_copy)
+
+               
+                kiddos=getChildrenEdges(nd_copy)
+                nd_copy.edge=Edge[]
+                append!(nd_copy.edge,kiddos)
+                push!(nd_copy.edge,e_copy)
+
+                e_copy.hybrid=false #This is no longer a hybrid edge
+                nd_copy.hybrid=false#This is no longer a hybrid node
+
+                ##Update the attributes of the tree that reflect the clade we added
+                append!(multree.node,clade_nodes)
+                append!(multree.edge,clade_edges)
+                append!(multree.leaf,clade_leaves)
+                multree.numTaxa += length(clade_leaves)
+                multree.numNodes+= length(clade_nodes)
+                multree.numEdges+= length(clade_edges)
+
+            end
+        end
+    end
+    return multree
+end
+
+
+
+##plotting the parent trees incorrectly labels the tips. Some ordering of the leaves is wrong(?) 
+##However, the writeTopology of the tree works correctly as well as printing the tree
+function parentTrees(net::HybridNetwork;resetNodes=false::Bool,resetEdges=false::Bool )
+    multree=mulTree(net)
+
+    names=Set()
+    for leaf in multree.leaf
+        push!(names,leaf.name)
+    end
+    keys=string.(collect(names))
+    ptrees=HybridNetwork[]
+    downsampleTaxon!(multree,keys,1,ptrees)
+    resetNodes && resetNodeNumbers!.(ptrees);
+    resetEdges && resetEdgeNumbers!.(ptrees);
+
+    ##Sort of the same issue as deleteleaf and isEqual but with the tree.leaf field. Instead of mucking around in some of those functions I correct tree.leaf here
+    ##The wrong leaves may have been deleted from each pt.leaf so we correct it here 
+    for pt in ptrees
+        pt.leaf=Node[] ##Start with a clean slate
+        preorder!(pt)
+        for n in pt.nodes_changed ##go throughout the tree and add nodes that are leaves
+            n.leaf && push!(pt.leaf,n)
+        end
+    end
+
+
+    return ptrees
+end
+
+function downsampleTaxon!(tree::HybridNetwork, keys::Array{String,1},it::Int64, parent_trees::Array{HybridNetwork,1})
+    species=keys[it]##The species we want to downsample 
+    
+    leaf_pos=Int64[] ##This will store the indices of all the leaves of the species that we are interested in 
+    for i in 1:length(tree.node)
+        leaf=tree.node[i]
+        leaf.name==species &&  push!(leaf_pos,i)
+    end
+    ntips=length(leaf_pos)
+    for saved in 1:ntips 
+        pt=deepcopy(tree)
+        for i in 1:ntips
+            #saved!=i && deleteLeaf!(pt,pt.node[leaf_pos[i]])
+            saved!=i && deleteleaf!(pt,leaf_pos[i];fuse=false,index=true,simplify=false)
+        end
+        if it==length(keys) ##We have downsampled all taxon as much as we want. We have a parent tree
+            sort!(pt.leaf,by=p->p.number) ##Other downstream functions may require the leaves to be in a specific order
+            push!(parent_trees,pt)
+        else
+            downsampleTaxon!(pt,keys,it+1,parent_trees)
+        end
+    
+
+    end
+
+
+
+    
+
+
+end    
+
+"""
+    levelorder!(net::HybridNetwork)
+
+Updates attribute net.nodes_changed in which the nodes are level-ordered.
+The edges' direction needs to be correct before calling levelorder!, using directEdges!
+"""
+
+function levelorder!(net::HybridNetwork)
+
+    net.isRooted || error("net needs to be rooted for levelorder!, run root functions or directEdges!")
+    net.nodes_changed = Node[] # path of nodes in levelorder.
+    
+    currLevel = Node[] #all the nodes that we want to look at 
+    nextLevel = Node[] #The nodes we will look at. We build this up while looking at currLevel
+
+    push!(currLevel,net.node[net.root]) ##start looking at nodes from the root
+    while !isempty(currLevel)
+        while !isempty(currLevel)
+            nd = pop!(currLevel)
+            push!(net.nodes_changed,nd)
+            childs = getChildren(nd)
+            for child in childs
+                    if !child.hybrid #we are not at a hybrid node
+                        push!(nextLevel,child)
+                    else ##We are at a hybrid node
+                        #In this case we only want to add the node if both of its parents are in levelOrder
+                        parents = getParents(child)
+                        if(setdiff(parents,net.nodes_changed) |> isempty)
+                            push!(nextLevel,child)
+                        end
+                    end
+            end
+        end
+        currLevel=nextLevel
+        nextLevel=Node[]
+    end
+end
+
+function rankNodes!(net::HybridNetwork)
+    ##Rank all nodes. Leaves get rank 1. all other nodes get the rank = (rank of the highest child)+1
+    levelorder!(net)
+    for nd in reverse(net.nodes_changed) 
+        ##Going thru nodes in reverse levelorder to garuantees we evaluate all the children of a node beofore the node itself
+        if nd in net.leaf
+            nd.number=1
+        else
+            ranks= (x->x.number).(nd.children)
+            nd.number=maximum(ranks)+1
+        end
+    end
+end
+
+
 
 
 """
@@ -772,7 +971,7 @@ end
 # hybrid edges from node to another node are not removed. fused instead.
 # consequence: node having 2 hybrid edges away from node should not occur.
 function deleteleaf!(net::HybridNetwork, nodeNumber::Integer;
-                     index=false::Bool, simplify=true::Bool)
+                     fuse=true::Bool,index=false::Bool, simplify=true::Bool)
     i = nodeNumber # good if index=true
     if !index
       try
@@ -793,17 +992,29 @@ function deleteleaf!(net::HybridNetwork, nodeNumber::Integer;
         # remove leaf and pe.
         removeNode!(pn,pe)  # perhaps useless. in case gc() on pe affects pn
         removeEdge!(pn,pe)
+
         deleteEdge!(net,pe,part=false)
         if net.root==i # if node was the root, new root = pn
             net.root = getIndex(pn,net)
         end
-        deleteNode!(net,net.node[i])
+
+        ##Not sure if these do different enough things such that they break other downstream functions.
+        ##TODO test these
+        if !fuse
+            deleteNode!(net,net.node[i],thorough=true)
+        else
+            deleteNode!(net,net.node[i])
+        end
         if pn.leaf # network had 2 nodes only: pn and the leaf
             length(net.edge)==0 || error("neighbor of leaf $(net.node[i].name) is another leaf, but network had $(length(net.edge)) edges (instead of 1).")
             length(pn.edge)==0 || error("neighbor of leaf $(net.node[i].name) is another leaf, which had $(length(pn.edge)) edges (instead of 1)")
             return nothing # all done: exit function
         end
-        deleteleaf!(net, pn.number, simplify=simplify)
+        
+        #deleteleaf!(net,pn.number,simplify=true)
+        pn_index=findfirst(x -> x===pn, net.node)
+        deleteleaf!(net,pn_index,fuse=fuse,index=true, simplify=simplify)
+
     elseif length(net.node[i].edge)==2
         e1 = net.node[i].edge[1]
         e2 = net.node[i].edge[2]
@@ -823,25 +1034,27 @@ function deleteleaf!(net::HybridNetwork, nodeNumber::Integer;
             deleteleaf!(net, p1.number, simplify=simplify)
             sameparent || deleteleaf!(net, p2.number, simplify=simplify)
         else
-            e1 = fuseedgesat!(i,net) # fused edge
-            if simplify && e1.hybrid # check for cycle of k=2 nodes
-                cn = getChild(e1)
-                e2 = nothing
-                for e in cn.edge # find companion hybrid edge
-                    if e.hybrid && e ≢ e1 && cn ≡ getChild(e)
-                        e2=e; break;
+            if fuse
+                e1 = fuseedgesat!(i,net) # fused edge
+                if simplify && e1.hybrid # check for cycle of k=2 nodes
+                    cn = getChild(e1)
+                    e2 = nothing
+                    for e in cn.edge # find companion hybrid edge
+                        if e.hybrid && e ≢ e1 && cn ≡ getChild(e)
+                            e2=e; break;
+                        end
                     end
-                end
-                e2!=nothing || error("node $(cn.number) with a single parent hybrid edge")
-                pn  = getParent(e1)
-                if pn ≡ getParent(e2)
-                    # e1 and e2 have same child and same parent. Remove e1.
-                    e2.hybrid=false;
-                    e2.isMajor=true; e2.gamma += e1.gamma
-                    removeEdge!(pn,e1); removeEdge!(cn,e1)
-                    deleteEdge!(net,e1,part=false)
-                    # call recursion again because pn and/or cn might be of degree 2.
-                    deleteleaf!(net, cn.number, simplify=simplify)
+                    e2!=nothing || error("node $(cn.number) with a single parent hybrid edge")
+                    pn  = getParent(e1)
+                    if pn ≡ getParent(e2)
+                        # e1 and e2 have same child and same parent. Remove e1.
+                        e2.hybrid=false;
+                        e2.isMajor=true; e2.gamma += e1.gamma
+                        removeEdge!(pn,e1); removeEdge!(cn,e1)
+                        deleteEdge!(net,e1,part=false)
+                        # call recursion again because pn and/or cn might be of degree 2.
+                        deleteleaf!(net, cn.number, simplify=simplify)
+                    end
                 end
             end
         end
