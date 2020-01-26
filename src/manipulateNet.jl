@@ -624,7 +624,7 @@ function preorder(net::HybridNetwork,node::Node)
     queue = Node[] # problem with PriorityQueue(): dequeue() takes a
                    # random member if all have the same priority 1.
     net.visited = [false for i = 1:size(net.node,1)];
-    preorderNodes=Node[]
+    preordernodes=Node[]
     push!(queue,node) # push root into queue
     while !isempty(queue)
         #println("at this moment, queue is $([n.number for n in queue])")
@@ -633,7 +633,7 @@ function preorder(net::HybridNetwork,node::Node)
         # the "curr"ent node may have been already visited: because simple loop (2-cycle)
         !net.visited[currind] || continue
         net.visited[currind] = true # visit curr node
-        push!(preorderNodes,curr) #push curr into path
+        push!(preordernodes,curr) #push curr into path
         for e in curr.edge
             if curr == getParent(e)
                 other = getChild(e)
@@ -651,7 +651,7 @@ function preorder(net::HybridNetwork,node::Node)
             end
         end
     end
-    return preorderNodes
+    return preordernodes
 end
 
 function mulTree(net::HybridNetwork)
@@ -764,13 +764,80 @@ function downsampleTaxon!(tree::HybridNetwork, keys::Array{String,1},it::Int64, 
     
 
     end
+end 
+
+function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
+    ##NOTE:: deleting a clade may produce edges in the resulting network that could be collapsed/fused. This function currently does NOT collapse those edges 
+    ##NOTE:: deleting a clade currently deletes everything under the mrca, including hybrid species. Perhaps in the future functionality could be added to not remove hybrid species and just move them under the other hybtid parent 
+    ##NOTE:: we do not update net.names
+
+    nds=preorder(net,mrca) ##Get an array of all the nodes we want to remove
 
 
 
+
+    if keepMRCA ##we want to remove all child edges from MRCA
+        deleteat!(nds,1) ##remove MRCA from the list of nodes to be deleted
+        i=1
+        while i <= length(mrca.edge)
+            if getParent(mrca.edge[i])==mrca
+                 deleteat!(mrca.edge,i)
+                 i-=1
+            end
+            i+=1
+            
+        end
+    else ##we want to remove edges from the parents of MRCA that point to the MRCA
+        for e in mrca.edge
+            if getChild(e)==mrca
+                par=getOtherNode(e,mrca)
+                deleteat!(par.edge,findfirst(x->x==e,par.edge))
+        end
+    end
+
+    deledges=Edge[] ##edges to be removed from net.edge
+    delhybs=Node[] #Nodes to be removed from net.hyb
+    delleaves=Node[] ##Nodes to be removed from net.leaf
+    for nd in nds
+
+        append!(deledges,nd.edge)
+        
+        if nd.hybrid 
+            push!(delhybs,nd)
+
+            ##we need to consider the case where one of the parents of a hybrid isn't in the deleted clade
+            for e in getParentEdges(nd) ##find the parents of the hybrid species and remove the edges that point to the hybrid
+                ## ^ really, this only needs to be done for the edges with a parent not in nds. oh well, we're slightly less efficient
+                par= getOtherNode(e,nd)
+                edgeind=findfirst(x-> x== e, par.edge)
+                deleteat!(par.edge,edgeind)
+            end
+        end
+
+        nd.leaf && push!(delleaves,nd)
+    end
     
+    ##update attributes of net accordingly
+    setdiff!(net.node,nds)
+    setdiff!(net.edge,deledges)
+    setdiff!(net.hybrid,delhybs)
+    setdiff!(net.leaf,delleaves)
+
+    net.numNodes=length(net.node)
+    net.numEdges=length(net.edge)
+    net.numhybrids=length(net.hybrid)
+    net.numTaxa=length(net.leaf)
+end
 
 
-end    
+function getTips(net::HybridNetwork, nd::Node)
+    nums=descendants(nd.edge[1]) ##Node number of all the descendants
+    tips=net.leaf[(x->x.number in nums).(net.leaf)]
+    return tips
+end
+
+
+
 
 """
     levelorder!(net::HybridNetwork)
