@@ -429,7 +429,7 @@ function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
             tip2=tipnums[j]
 
             edges=Float64[]
-            for k in edgenumsrr
+            for k in edgenums
                 push!(edges,(e_cntrbtns[tip1][k]*e_cntrbtns[tip2][k])*edgelen_dict[k]) ##Cov(aX,bY)= ab*Cov(X,Y) and when X=Y we have (a^2)*Var(X)
                 #push!(edges,min(e_cntrbtns[tip1][k],e_cntrbtns[tip2][k]))
             end
