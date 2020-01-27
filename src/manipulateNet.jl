@@ -768,13 +768,10 @@ end
 
 function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
     ##NOTE:: deleting a clade may produce edges in the resulting network that could be collapsed/fused. This function currently does NOT collapse those edges 
-    ##NOTE:: deleting a clade currently deletes everything under the mrca, including hybrid species. Perhaps in the future functionality could be added to not remove hybrid species and just move them under the other hybtid parent 
+    ##NOTE:: deleting a clade currently deletes everything under the mrca, including hybrid species. Perhaps in the future functionality could be added to not remove hybrid species and just move them under the other hybrid parent 
     ##NOTE:: we do not update net.names
 
     nds=preorder(net,mrca) ##Get an array of all the nodes we want to remove
-
-
-
 
     if keepMRCA ##we want to remove all child edges from MRCA
         deleteat!(nds,1) ##remove MRCA from the list of nodes to be deleted
@@ -792,6 +789,7 @@ function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
             if getChild(e)==mrca
                 par=getOtherNode(e,mrca)
                 deleteat!(par.edge,findfirst(x->x==e,par.edge))
+            end
         end
     end
 
@@ -825,7 +823,7 @@ function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
 
     net.numNodes=length(net.node)
     net.numEdges=length(net.edge)
-    net.numhybrids=length(net.hybrid)
+    net.numHybrids=length(net.hybrid)
     net.numTaxa=length(net.leaf)
 end
 

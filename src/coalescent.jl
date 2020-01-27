@@ -28,7 +28,7 @@ function nHistories(i::Int64,j::Int64)
     return(mult_term)
 end
 
-function nTops(n::Int64,labeled=true)
+function nTops(n::Int64,labeled=true::Bool,rooted=true::Bool)
     if labeled ##Number of labeled tree topologies
         n==1 && return(1)
         return(Int(factorial(2*n-3)/((2^(n-2)*factorial(n-2)))))
@@ -114,28 +114,25 @@ function unlabeledGenerate(n)
             end
         end
     end
-    return ((vect_tops,sym_tops,prod_tops))
+    return ((vect_tops,sym_tops,prod_tops));
 end
-
 
 function splitsHistories(splits::Array{Int64,1}, tops_mat)
     total=[0]
 
     spltsHisRec(splits,1,1,tops_mat,total)
    
-    return total[1]
+    return total[1];
 
 end
 
 function spltsHisRec(splits::Array{Int64,1},ind_splits,running_val,tops_mat,total::Array{Int64,1} )
     split=splits[ind_splits]
-    println("We're in split number ",ind_splits)
-    println("the running value is: ", running_val)
     ##Get all the symmetries and products for the split we're interested in  
     syms=tops_mat[2][splits[ind_splits]]
     prods=tops_mat[3][splits[ind_splits]]
 
-    nshapes=length(syms) ##the number of treeshapes for a given split
+    nshapes=length(syms) ##the number of treeshapes for a given number of taxa in the split
 
     for shape in 1:nshapes ##Do calculation for each shape
         val=running_val ##reset the value for each shape
@@ -146,8 +143,6 @@ function spltsHisRec(splits::Array{Int64,1},ind_splits,running_val,tops_mat,tota
         if ind_splits==length(splits) ##Base Case: we went thru each split and did the calculation
             val*=factorial(sum((x->x-1).(splits)))
             total[1]+=val 
-            println("we're adding ", val, " to the total")
-        
         else ##we still have more splits to do calculations
             spltsHisRec(splits,ind_splits+1,val,tops_mat,total)
         end
