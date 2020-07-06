@@ -13,7 +13,7 @@ module PhyloNetworks
     # other libraries, indicate compatible version in Project.toml
     using BioSequences
     using BioSymbols
-    using Combinatorics: combinations
+    using Combinatorics: combinations, partitions
     using CSV
     using DataFrames
     using DataStructures # for updateInCycle with priority queue
@@ -174,5 +174,6 @@ module PhyloNetworks
     include("traitsLikDiscrete.jl")
     include("deprecated.jl")
     include("nj.jl")
+    include("coalescent.jl")
 
 end #module

@@ -628,6 +628,7 @@ function preorder(net::HybridNetwork,node::Node)
     push!(queue,node) # push root into queue
     while !isempty(queue)
         #println("at this moment, queue is $([n.number for n in queue])")
+
         curr = pop!(queue); # deliberate choice over shift! for cladewise order
         currind = findfirst(x -> x===curr, net.node)
         # the "curr"ent node may have been already visited: because simple loop (2-cycle)
@@ -654,14 +655,25 @@ function preorder(net::HybridNetwork,node::Node)
     return preordernodes
 end
 
-function mulTree(net::HybridNetwork)
+function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
     multree=deepcopy(net)
     levelorder!(multree)
     multree.nodes_changed=reverse(multree.nodes_changed) 
     
-    for nd in multree.nodes_changed #raverse the nodes in reverse level order 
+    hyb_sorting=emptyHybSorting(multree;type="node")
+
+    for nd in multree.nodes_changed #traverse the nodes in reverse level order 
         if(nd.hybrid) ##only worry about hybrid nodes
             parent_edges= getParentEdges(nd)
+
+            ##update hyb sorting
+            orig_clade=preorder(multree,nd)
+            orig_tips=[x.leaf for x in orig_clade]
+            orig_tips=orig_clade[orig_tips]
+            println(orig_tips)
+            parent_node=getParent(parent_edges[1])
+            hyb_sorting[nd.number][parent_node.number]=Set(orig_tips)
+
             for e in parent_edges[2:end] ##Delete the edge between the all parents and the hybrid node. Then add a duplicate clade to that parent
                 parent_node=getParent(e)
 
@@ -703,10 +715,16 @@ function mulTree(net::HybridNetwork)
                 multree.numNodes+= length(clade_nodes)
                 multree.numEdges+= length(clade_edges)
 
+                ##update hyb sorting
+                hyb_sorting[nd.number][parent_node.number]=Set(clade_leaves)
+
+
             end
         end
     end
+    report_hybsorting && (return (multree,hyb_sorting))
     return multree
+    
 end
 
 
@@ -714,15 +732,17 @@ end
 ##plotting the parent trees incorrectly labels the tips. Some ordering of the leaves is wrong(?) 
 ##However, the writeTopology of the tree works correctly as well as printing the tree
 function parentTrees(net::HybridNetwork;resetNodes=false::Bool,resetEdges=false::Bool )
-    multree=mulTree(net)
+    things=mulTree(net,true)
+    multree=things[1]
 
-    names=Set()
+    nmes=Set()
     for leaf in multree.leaf
-        push!(names,leaf.name)
+        push!(nmes,leaf.name)
     end
-    keys=string.(collect(names))
+    keys=string.(collect(nmes))
     ptrees=HybridNetwork[]
-    downsampleTaxon!(multree,keys,1,ptrees)
+    hybsortings=Dict{Int64, Dict{Int64,Set{Node}}}[] ##This is probably one of the most disgusting things I've ever done. An array of dictionaries where the values are dictionaries themselves and those values are sets
+    downsampleTaxon!(things,keys,1,ptrees,hybsortings)
     resetNodes && resetNodeNumbers!.(ptrees);
     resetEdges && resetEdgeNumbers!.(ptrees);
 
@@ -740,37 +760,52 @@ function parentTrees(net::HybridNetwork;resetNodes=false::Bool,resetEdges=false:
     return ptrees
 end
 
-function downsampleTaxon!(tree::HybridNetwork, keys::Array{String,1},it::Int64, parent_trees::Array{HybridNetwork,1})
+function downsampleTaxon!(treeNhybsort, keys::Array{String,1},it::Int64, parent_trees::Array{HybridNetwork,1},hybsortings::Array{Dict{Int64, Dict{Int64,Set{Node}}},1})
     species=keys[it]##The species we want to downsample 
     
     leaf_pos=Int64[] ##This will store the indices of all the leaves of the species that we are interested in 
-    for i in 1:length(tree.node)
-        leaf=tree.node[i]
+
+    for i in 1:length(treeNhybsort[1].node)
+        leaf=treeNhybsort[1].node[i]
         leaf.name==species &&  push!(leaf_pos,i)
     end
     ntips=length(leaf_pos)
     for saved in 1:ntips 
-        pt=deepcopy(tree)
+        things=deepcopy(treeNhybsort)
+        pt=things[1]
+        hybsort=things[2]
         for i in 1:ntips
             #saved!=i && deleteLeaf!(pt,pt.node[leaf_pos[i]])
-            saved!=i && deleteleaf!(pt,leaf_pos[i];fuse=false,index=true,simplify=false)
+            if saved!=i
+                del_node=pt.node[leaf_pos[i]]
+                for (key1,val1) in hybsort
+                    for (key2,val2) in val1
+                        delete!(val2,del_node)
+                    end
+                end
+                deleteleaf!(pt,leaf_pos[i];fuse=false,index=true,simplify=false)
+
+            end
+            
         end
         if it==length(keys) ##We have downsampled all taxon as much as we want. We have a parent tree
             sort!(pt.leaf,by=p->p.number) ##Other downstream functions may require the leaves to be in a specific order
             push!(parent_trees,pt)
+            push!(hybsortings,hybsort)
         else
-            downsampleTaxon!(pt,keys,it+1,parent_trees)
+            downsampleTaxon!(things,keys,it+1,parent_trees,hybsortings)
         end
     
 
     end
 end 
 
-function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
+
+
+function removeClade!(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
     ##NOTE:: deleting a clade may produce edges in the resulting network that could be collapsed/fused. This function currently does NOT collapse those edges 
     ##NOTE:: deleting a clade currently deletes everything under the mrca, including hybrid species. Perhaps in the future functionality could be added to not remove hybrid species and just move them under the other hybrid parent 
     ##NOTE:: we do not update net.names
-
     nds=preorder(net,mrca) ##Get an array of all the nodes we want to remove
 
     if keepMRCA ##we want to remove all child edges from MRCA
@@ -785,12 +820,12 @@ function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
             
         end
     else ##we want to remove edges from the parents of MRCA that point to the MRCA
-        for e in mrca.edge
-            if getChild(e)==mrca
+         for e in mrca.edge
+             if getChild(e)==mrca
                 par=getOtherNode(e,mrca)
-                deleteat!(par.edge,findfirst(x->x==e,par.edge))
-            end
-        end
+             deleteat!(par.edge,findfirst(x->x==e,par.edge))
+             end
+         end
     end
 
     deledges=Edge[] ##edges to be removed from net.edge
@@ -807,7 +842,7 @@ function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
             for e in getParentEdges(nd) ##find the parents of the hybrid species and remove the edges that point to the hybrid
                 ## ^ really, this only needs to be done for the edges with a parent not in nds. oh well, we're slightly less efficient
                 par= getOtherNode(e,nd)
-                edgeind=findfirst(x-> x== e, par.edge)
+                edgeind=(x-> x== e).(par.edge)
                 deleteat!(par.edge,edgeind)
             end
         end
@@ -816,19 +851,25 @@ function removeClade(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
     end
     
     ##update attributes of net accordingly
-    setdiff!(net.node,nds)
-    setdiff!(net.edge,deledges)
-    setdiff!(net.hybrid,delhybs)
-    setdiff!(net.leaf,delleaves)
+
+    rt_nd=net.node[net.root] ##Store the root node so we can find it later
+    setdiff!(net.node,Set(nds))
+    setdiff!(net.edge,Set(deledges))
+    setdiff!(net.hybrid,Set(delhybs))
+    setdiff!(net.leaf,Set(delleaves))
 
     net.numNodes=length(net.node)
     net.numEdges=length(net.edge)
     net.numHybrids=length(net.hybrid)
     net.numTaxa=length(net.leaf)
+
+    net.root=findfirst(isequal(rt_nd),net.node) ##Find the new index of the root node and set the value of net.root
+
 end
 
 
 function getTips(net::HybridNetwork, nd::Node)
+    directEdges!(net)
     nums=descendants(nd.edge[1]) ##Node number of all the descendants
     tips=net.leaf[(x->x.number in nums).(net.leaf)]
     return tips
@@ -880,10 +921,10 @@ function rankNodes!(net::HybridNetwork)
     levelorder!(net)
     for nd in reverse(net.nodes_changed) 
         ##Going thru nodes in reverse levelorder to garuantees we evaluate all the children of a node beofore the node itself
-        if nd in net.leaf
+        if nd.leaf
             nd.number=1
         else
-            ranks= (x->x.number).(nd.children)
+            ranks= (x->x.number).(getChildren(nd))
             nd.number=maximum(ranks)+1
         end
     end
@@ -1064,6 +1105,7 @@ function deleteleaf!(net::HybridNetwork, nodeNumber::Integer;
         end
 
         ##Not sure if these do different enough things such that they break other downstream functions.
+        ##Also this probably shouldn't be tied to 'fuse'?
         ##TODO test these
         if !fuse
             deleteNode!(net,net.node[i],thorough=true)
@@ -1109,7 +1151,7 @@ function deleteleaf!(net::HybridNetwork, nodeNumber::Integer;
                             e2=e; break;
                         end
                     end
-                    e2!=nothing || error("node $(cn.number) with a single parent hybrid edge")
+                    e2!==nothing || error("node $(cn.number) with a single parent hybrid edge")
                     pn  = getParent(e1)
                     if pn ≡ getParent(e2)
                         # e1 and e2 have same child and same parent. Remove e1.

@@ -357,10 +357,7 @@ end
 
 function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
     pts=parentTrees(net;resetNodes=false) 
-
     
-
-
     tipnums=(x->x.number).(net.leaf)
     
     edgenums=(x->x.number).(net.edge)
@@ -1265,10 +1262,9 @@ mutable struct PhyloNetworkLinearModel <: GLM.LinPredModel
     lambda::Float64
 end
 
-PhyloNetworkLinearModel(lm_fit, V, Vy, RL, Y, X, logdetVy, ind, nonmissing, model) =
-  PhyloNetworkLinearModel(lm_fit,V,Vy, RL, Y, X, logdetVy, ind, nonmissing, model, 1.0)
-
-# Function for lm with net residuals
+function PhyloNetworkLinearModel(lm_fit, V, Vy, RL, Y, X, logdetVy, ind, nonmissing, model)
+    PhyloNetworkLinearModel(lm_fit,V,Vy, RL, Y, X, logdetVy, ind, nonmissing, model, 1.0)
+end
 function phyloNetworklm(X::Matrix,
                         Y::Vector,
                         net::HybridNetwork;
@@ -1307,6 +1303,49 @@ function phyloNetworklm(X::Matrix,
     end
 end
 
+# Function for lm with net residuals
+function phyloParentlm(X::Matrix,
+                        Y::Vector,
+                        net::HybridNetwork,
+                        VCV::DataFrames.DataFrame;
+                        nonmissing=trues(length(Y))::BitArray{1},
+                        model="BM"::AbstractString,
+                        ind=[0]::Vector{Int},
+                        startingValue=0.5::Real,
+                        fixedValue=missing::Union{Real,Missing})
+    ## Choose Model
+    if model == "BM"
+        # Geting variance covariance
+        V = convert(Matrix,VCV)
+        # Fit
+        return phyloParentlm_BM(X, Y, net, V;
+                                 nonmissing=nonmissing, ind=ind)
+    end
+
+##TODO Other models don't work on the parent trees 
+#    if model == "lambda"
+#        # Geting variance covariance
+#        V = sharedPathMatrix(net)
+#        # Get gammas and heights
+#        gammas = getGammas(net)
+#        times = getHeights(net)
+#        # Fit
+#        return phyloNetworklm_lambda(X, Y, V, gammas, times;
+#                                     nonmissing=nonmissing, ind=ind,
+#                                     startingValue=startingValue, fixedValue=fixedValue)
+#    end
+#    if (model == "scalingHybrid")
+#        # Get gammas
+#        preorder!(net)
+#        gammas = getGammas(net)
+#        # Fit
+#        return phyloNetworklm_scalingHybrid(X, Y, net, gammas;
+#                                            nonmissing=nonmissing, ind=ind,
+#                                            startingValue=startingValue, fixedValue=fixedValue)
+#    end
+end
+
+
 ###############################################################################
 ## Fit BM
 
@@ -1317,8 +1356,9 @@ function phyloNetworklm_BM(X::Matrix,
                            ind=[0]::Vector{Int},
                            model="BM"::AbstractString,
                            lambda=1.0::Real)
-    # Extract tips matrix
+    # Extract tips matrix 
     Vy = V[:Tips]
+
     # Re-order if necessary
     if (ind != [0]) Vy = Vy[ind, ind] end
     # Keep only not missing values
@@ -1329,6 +1369,35 @@ function phyloNetworklm_BM(X::Matrix,
     # Fit
     PhyloNetworkLinearModel(lm(RL\X, RL\Y), V, Vy, RL, Y, X, LinearAlgebra.logdet(Vy), ind, nonmissing, model, lambda)
 end
+
+function phyloParentlm_BM(X::Matrix,
+    Y::Vector,
+    net::HybridNetwork,
+    V::Matrix;
+    nonmissing=trues(length(Y))::BitArray{1}, # Which tips are not missing ?
+    ind=[0]::Vector{Int},
+    model="BM"::AbstractString,
+    lambda=1.0::Real)
+# Extract tips matrix only if given MatrixTopologicalOrder
+if (typeof(V)==MatrixTopologicalOrder)
+Vy = V[:Tips]
+else
+Vy=V
+end
+# Re-order if necessary
+if (ind != [0]) Vy = Vy[ind, ind] end
+# Keep only not missing values
+Vy = Vy[nonmissing, nonmissing]
+# Cholesky decomposition
+R = cholesky(Vy)
+RL = R.L
+# Fit
+PhyloNetworkLinearModel(lm(RL\X, RL\Y), sharedPathMatrix(net), Vy, RL, Y, X, LinearAlgebra.logdet(Vy), ind, nonmissing, model, lambda)
+end
+
+
+
+
 
 ###############################################################################
 ## Fit Pagel's Lambda
@@ -1789,6 +1858,74 @@ function phyloNetworklm(f::StatsModels.FormulaTerm,
                        startingValue=startingValue, fixedValue=fixedValue),
         mf, mm)
 end
+
+
+function phyloParentlm(f::StatsModels.FormulaTerm,
+    fr::AbstractDataFrame,
+    net::HybridNetwork,
+    VCV::DataFrame;
+    
+    model="BM"::AbstractString,
+    no_names=false::Bool,
+    ftolRel=fRelTr::AbstractFloat,
+    xtolRel=xRelTr::AbstractFloat,
+    ftolAbs=fAbsTr::AbstractFloat,
+    xtolAbs=xAbsTr::AbstractFloat,
+    startingValue=0.5::Real,
+    fixedValue=missing::Union{Real,Missing})
+# Match the tips names: make sure that the data provided by the user will
+# be in the same order as the ordered tips in matrix V.
+preorder!(net)
+if no_names # The names should not be taken into account.
+ind = [0]
+@info """As requested (no_names=true), I am ignoring the tips names
+in the network and in the dataframe."""
+elseif (any(tipLabels(net) == "") || !any(DataFrames.names(fr) .== :tipNames))
+if (any(tipLabels(net) == "") && !any(DataFrames.names(fr) .== :tipNames))
+error("""The network provided has no tip names, and the input dataframe has
+no column labelled tipNames, so I can't match the data on the network
+unambiguously. If you are sure that the tips of the network are in the
+same order as the values of the dataframe provided, then please re-run
+this function with argument no_name=true.""")
+end
+if any(tipLabels(net) == "")
+error("""The network provided has no tip names, so I can't match the data
+on the network unambiguously. If you are sure that the tips of the
+network are in the same order as the values of the dataframe provided,
+then please re-run this function with argument no_name=true.""")
+end
+if !any(DataFrames.names(fr) .== :tipNames)
+error("""The input dataframe has no column labelled tipNames, so I can't
+match the data on the network unambiguously. If you are sure that the
+tips of the network are in the same order as the values of the dataframe
+provided, then please re-run this function with argument no_name=true.""")
+end
+else
+#        ind = indexin(V.tipNames, fr[:tipNames])
+ind = indexin(fr[!,:tipNames], tipLabels(net))
+if any(ind == 0) || length(unique(ind)) != length(ind)
+error("""Tips names of the network and names provided in column tipNames
+of the dataframe do not match.""")
+end
+#   fr = fr[ind, :]
+end
+# Find the regression matrix and response vector
+data, nonmissing = StatsModels.missing_omit(StatsModels.columntable(fr), f)
+sch = StatsModels.schema(f, data)
+f = StatsModels.apply_schema(f, sch, PhyloNetworkLinearModel)
+mf = ModelFrame(f, sch, data, PhyloNetworkLinearModel)
+mm = StatsModels.ModelMatrix(mf)
+Y = StatsModels.response(mf)
+# Y = convert(Vector{Float64}, StatsModels.response(mf))
+# Y, pred = StatsModels.modelcols(f, fr)
+StatsModels.TableRegressionModel(
+phyloParentlm(mm.m, Y,net, VCV; nonmissing=nonmissing, model=model, ind=ind,
+   startingValue=startingValue, fixedValue=fixedValue),
+mf, mm)
+end
+
+
+
 
 ### Methods on type phyloNetworkRegression
 
