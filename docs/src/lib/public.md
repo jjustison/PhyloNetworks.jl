@@ -48,6 +48,7 @@ biconnectedComponents
 blobDecomposition
 getlabels
 nparams
+nni!
 ```
 
 ## data and topology read/write
@@ -137,4 +138,6 @@ maxParsimonyNet
 nstates
 stationary
 empiricalDNAfrequencies
+mapindividuals
+phyLiNC!
 ```

@@ -5,10 +5,10 @@ module PhyloNetworks
     # stdlib (standard libraries)
     using Dates
     using Distributed
-    using LinearAlgebra # for LowerTriangular, logdet, diag
+    using LinearAlgebra # for LowerTriangular, logdet, diag, mul!
     using Printf: @printf, @sprintf
     using Random
-    using Statistics: mean, quantile
+    using Statistics: mean, quantile, median
 
     # other libraries, indicate compatible version in Project.toml
     using BioSequences
@@ -108,6 +108,7 @@ module PhyloNetworks
         simulate,
         TraitSimulation,
         ParamsBM,
+        ParamsMultiBM,
         ShiftNet,
         shiftHybrid,
         getShiftEdgeNumber,
@@ -146,6 +147,9 @@ module PhyloNetworks
         readfastatodna,
         stationary,
         empiricalDNAfrequencies,
+        nni!,
+        mapindividuals,
+        phyLiNC!,
         # neighbor joining
         nj
 
@@ -153,12 +157,14 @@ module PhyloNetworks
     include("auxiliary.jl")
     include("update.jl")
     include("undo.jl")
+    include("addHybrid_snaq.jl")
     include("addHybrid.jl")
     include("deleteHybrid.jl")
-    include("moves.jl")
+    include("moves_snaq.jl")
+    include("moves_semidirected.jl")
     include("readwrite.jl")
     include("readData.jl")
-    include("optimization.jl")
+    include("snaq_optimization.jl")
     include("pseudolik.jl")
     include("descriptive.jl")
     include("manipulateNet.jl")
@@ -175,5 +181,6 @@ module PhyloNetworks
     include("deprecated.jl")
     include("nj.jl")
     include("coalescent.jl")
+    include("phyLiNCoptimization.jl")
 
 end #module
