@@ -159,8 +159,6 @@ function findLowNode(net::HybridNetwork) ##TODO. Make this generate a list of al
     nd_changed= net.nodes_changed ##store node ordering
     rankNodes!(net)
     
-
-    
     ##get all hybrid nodes
     hybs=net.hybrid
 
@@ -179,7 +177,7 @@ function findLowNode(net::HybridNetwork) ##TODO. Make this generate a list of al
     return nds
 end
 
-function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm)
+function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm,hyb_sorting::Dict{Int64, Dict{Int64,Set{String}}})
 
     ## Make a copy of the network that we can muck around with.
     nd_ind=findfirst(x->x==decomp_node,network.node)
@@ -201,9 +199,6 @@ function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm)
     ##We ultimately want ot report the decomposed trees and their respective probabilities after everything is all said and done
     decomposed_trees=HybridNetwork[]
     probs=Float64[]
-
-
-
 
     for subset in subsets
         ##start with a fresh tree for adding things back
@@ -262,7 +257,12 @@ function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm)
         push!(decomposed_trees,decomp_net)
         push!(probs,treeprob)
     end
-    return collect(zip(decomposed_trees,probs))
+    ##Make copies of hyb_sorting for each decomposed tree
+    hybsort= Dict{Int64, Dict{Int64,Set{String}}}[]
+    for i in 1:length(probs)
+        push!(hybsort,deepcopy(hyb_sorting))
+    end
+    return collect(zip(decomposed_trees,probs,hybsort))
 end
 
 function emptyHybSorting(net::HybridNetwork;type="name")
@@ -359,11 +359,7 @@ function decompHyb(network::HybridNetwork,nd::Node,prb::Float64,hyb_sorting::Dic
             decomp_net.numEdges+=1
             r_elen=c_elen
         elseif  length(leftgoing)==0 ##if there is nothing going to the left we need to resolve the parent node 
-            if ldecomp_par.hybrid
-                resolveLonelyHybrid!(decomp_net,ldecomp_par,true)
-            else
-                fuseedgesat!(findfirst(x->x==ldecomp_par,decomp_net.node),decomp_net)
-            end
+            deleteleaf!(decomp_net,findfirst(x->x===ldecomp_par,decomp_net.node);index=true,simplify=false)
         else ##only 1 tip going left
             r_elen=c_elen+rp_elen
         end
@@ -403,11 +399,7 @@ function decompHyb(network::HybridNetwork,nd::Node,prb::Float64,hyb_sorting::Dic
             decomp_net.numEdges+=1
             r_elen=c_elen
         elseif  length(rightgoing)==0 ##if there is nothing going to the right we need to resolve the parent node 
-            if rdecomp_par.hybrid
-                resolveLonelyHybrid!(decomp_net,rdecomp_par,true)
-            else
-                fuseedgesat!(findfirst(x->x==rdecomp_par,decomp_net.node),decomp_net)
-            end
+            deleteleaf!(decomp_net,findfirst(x->x===rdecomp_par,decomp_net.node);index=true,simplify=false)
         else #only 1 tip going right
             r_elen=c_elen+rp_elen
         end
@@ -462,5 +454,38 @@ function decompHyb(network::HybridNetwork,nd::Node,prb::Float64,hyb_sorting::Dic
         push!(hybsorts,hybsort)
     end
     return collect(zip(decomposed_trees,probs,hybsorts))
+end
+
+
+function networkDecomposition(net::HybridNetwork)
+
+    hybsorting=emptyHybSorting(net)
+    prob=1.0
+    q= Array{Tuple{HybridNetwork,Array{Dict{Int64,Dict{Int64,Set{String}}},1},Float64}}() ##Queue of partially decomposed trees along with their hyb_sorting profiles and probabilities
+    fully_decomposed =  Array{Tuple{HybridNetwork,Array{Dict{Int64,Dict{Int64,Set{String}}},1},Float64}}() ##Where we store fully decompposed trees 
+    push!(q,(net,hybsorting,1.0))
+
+    ##determine how big of an unlabeledGenerate we need to run. it should be the size of max(numberLeaves(hyb_node) for all hyb_node in hyb_nodes)
+    nleaves=Int64[]
+    for hyb in net.hybrid
+        e=getChildrenEdges(hyb)[1]
+        length(descendants(e))
+    end
+
+    while (!isempty(q)) ##while there are still things in the Queue...
+
+        current=popfirst!(q)
+
+        curr_net=current[1]
+        curr_hybsort=current[2]
+        curr_prob=current[3]
+
+        decomp_nds=findLowNode
+
+    end
+
+    
+    nd=findLowNode(net)
+
 end
 

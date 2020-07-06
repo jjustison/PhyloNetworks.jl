@@ -780,6 +780,7 @@ The edges' direction needs to be correct before calling preorder!, using directE
 """
 function preorder!(net::HybridNetwork)
     net.isRooted || error("net needs to be rooted for preorder!, run root functions or directEdges!")
+    println(net.node[net.root])
     net.nodes_changed=preorder(net,net.node[net.root])
     # println("path of nodes is $([n.number for n in net.nodes_changed])")
 end
@@ -795,6 +796,7 @@ function preorder(net::HybridNetwork,node::Node)
         #println("at this moment, queue is $([n.number for n in queue])")
 
         curr = pop!(queue); # deliberate choice over shift! for cladewise order
+        length(net.node)>=10 && println(curr==net.node[10])
         currind = findfirst(x -> x===curr, net.node)
         # the "curr"ent node may have been already visited: because simple loop (2-cycle)
         !net.visited[currind] || continue
@@ -822,9 +824,9 @@ end
 
 function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
     multree=deepcopy(net)
+
     levelorder!(multree)
     multree.nodes_changed=reverse(multree.nodes_changed) 
-    
     hyb_sorting=emptyHybSorting(multree;type="node")
 
     for nd in multree.nodes_changed #traverse the nodes in reverse level order 
@@ -835,7 +837,6 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
             orig_clade=preorder(multree,nd)
             orig_tips=[x.leaf for x in orig_clade]
             orig_tips=orig_clade[orig_tips]
-            println(orig_tips)
             parent_node=getParent(parent_edges[1])
             hyb_sorting[nd.number][parent_node.number]=Set(orig_tips)
 
@@ -848,7 +849,7 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 nd_copy=getChild(e_copy) ##we want a copy of the tree at this node so we can duplicate the clade and add it where nessecary
                 clade_nodes=preorder(net_copy,nd_copy) 
                 
-                deleteHybridEdge!(multree,e,true)
+                deletehybridedge!(multree,e,true)
                 
                 clade_edges=Edge[]
                 clade_leaves=Node[]
@@ -863,7 +864,6 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 push!(parent_node.edge,e_copy)
                 push!(clade_edges,e_copy)
 
-               
                 kiddos=getChildrenEdges(nd_copy)
                 nd_copy.edge=Edge[]
                 append!(nd_copy.edge,kiddos)
@@ -911,6 +911,8 @@ function parentTrees(net::HybridNetwork;resetNodes=false::Bool,resetEdges=false:
     resetNodes && resetNodeNumbers!.(ptrees);
     resetEdges && resetEdgeNumbers!.(ptrees);
 
+    println("made it here")
+
     ##Sort of the same issue as deleteleaf and isEqual but with the tree.leaf field. Instead of mucking around in some of those functions I correct tree.leaf here
     ##The wrong leaves may have been deleted from each pt.leaf so we correct it here 
     for pt in ptrees
@@ -948,8 +950,7 @@ function downsampleTaxon!(treeNhybsort, keys::Array{String,1},it::Int64, parent_
                         delete!(val2,del_node)
                     end
                 end
-                deleteleaf!(pt,leaf_pos[i];fuse=false,index=true,simplify=false)
-
+                deleteleaf!(pt,leaf_pos[i];nofuse=true,index=true,simplify=false,thorough=true)
             end
             
         end
