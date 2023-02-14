@@ -29,7 +29,6 @@ function nHistories(i::Int64,j::Int64)
 end
 
 
-
 function nTops(n::Int64,labeled=true::Bool,rooted=true::Bool)
     if labeled ##Number of labeled tree topologies
         n==1 && return(1)
@@ -177,7 +176,7 @@ function findLowNode(net::HybridNetwork) ##TODO. Make this generate a list of al
     return nds
 end
 
-function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm,hyb_sorting::Dict{Int64, Dict{Int64,Set{String}}})
+function decompILS(network::HybridNetwork,decomp_node::Node,hyb_sorting::Dict{Int64, Dict{Int64,Set{String}}},prb::Float64,tm)
 
     ## Make a copy of the network that we can muck around with.
     nd_ind=findfirst(x->x==decomp_node,network.node)
@@ -250,7 +249,6 @@ function decompILS(network::HybridNetwork,decomp_node::Node,prb::Float64,tm,hyb_
         gij=g_ij(length(nmes),length(nms_coal),p_edge) ## the probability of i lineages coalescing into j lineages by time t
         hp=splitsHistories(length.(subset),tm) ##The number of coalescent histories that lead to these partitions
         ch=nHistories(length(nmes),length(nms_coal)) ##The total number of coalescent histories for i coalescing into j lineages
-
         treeprob=gij*(hp/ch)*prb ##TODO I'm concerned with underflow so make this deal with small numbers. perhaps switch to log probs
         treeprob==0 && error("Likely underflow of the probability")
         
@@ -290,7 +288,7 @@ function emptyHybSorting(net::HybridNetwork;type="name")
     return hybsort
 end
 
-function decompHyb(network::HybridNetwork,nd::Node,prb::Float64,hyb_sorting::Dict{Int64, Dict{Int64,Set{String}}} )
+function decompHyb(network::HybridNetwork,nd::Node,hyb_sorting::Dict{Int64, Dict{Int64,Set{String}}},prb::Float64 )
     ## Make a copy of the network that we can muck around with.
     nd_ind=findfirst(x->x==nd,network.node)
     net=deepcopy(network)
@@ -434,8 +432,6 @@ function decompHyb(network::HybridNetwork,nd::Node,prb::Float64,hyb_sorting::Dic
         right_names=String[]
         lnms= (x->split(x,"|")).(leftgoing)
         rnms= (x->split(x,"|")).(rightgoing)
-        println(lnms)
-        println(rnms)
         for nms in lnms
             append!(left_names,String.(nms))
         end
@@ -460,32 +456,58 @@ end
 function networkDecomposition(net::HybridNetwork)
 
     hybsorting=emptyHybSorting(net)
-    prob=1.0
-    q= Array{Tuple{HybridNetwork,Array{Dict{Int64,Dict{Int64,Set{String}}},1},Float64}}() ##Queue of partially decomposed trees along with their hyb_sorting profiles and probabilities
-    fully_decomposed =  Array{Tuple{HybridNetwork,Array{Dict{Int64,Dict{Int64,Set{String}}},1},Float64}}() ##Where we store fully decompposed trees 
-    push!(q,(net,hybsorting,1.0))
+    q= Array{Tuple{HybridNetwork,Float64,Dict{Int64,Dict{Int64,Set{String}}}},1}() ##Queue of partially decomposed trees along with their hyb_sorting profiles and probabilities
+    fully_decomposed =  Array{Tuple{HybridNetwork,Float64,Dict{Int64,Dict{Int64,Set{String}}}},1}() ##Where we store fully decomposed trees 
+    push!(q,(net,1.0,hybsorting))
 
     ##determine how big of an unlabeledGenerate we need to run. it should be the size of max(numberLeaves(hyb_node) for all hyb_node in hyb_nodes)
     nleaves=Int64[]
     for hyb in net.hybrid
-        e=getChildrenEdges(hyb)[1]
-        length(descendants(e))
+        e=getChildEdge(hyb)
+        push!(nleaves,length(descendants(e)))
     end
+    tm=unlabeledGenerate(maximum(nleaves))
 
     while (!isempty(q)) ##while there are still things in the Queue...
-
         current=popfirst!(q)
-
         curr_net=current[1]
         curr_hybsort=current[2]
         curr_prob=current[3]
 
-        decomp_nds=findLowNode
-
+        decomp_nd=findLowNode(curr_net)
+        if length(decomp_nd)!=0
+            decomp_nd=decomp_nd[1]
+            #decompose the tree based on the type of node
+            if decomp_nd.hybrid
+                decomp_things=decompHyb(curr_net,decomp_nd,curr_prob,curr_hybsort)
+            else 
+                decomp_things=decompILS(curr_net,decomp_nd,curr_prob,curr_hybsort,tm)
+            end
+            ##add the things to our Queue
+            append!(q,decomp_things)
+        else ##if we can't find a low node then the tree should be fully decomposed so we want to record it
+            push!(fully_decomposed,current)
+        end
     end
-
-    
-    nd=findLowNode(net)
-
+    return fully_decomposed
 end
 
+function parentTreeProbs(net::HybridNetwork;scalar=1.0::Float64)
+    pts = parentTrees(net;report_hybsorting=true)
+
+    (x -> (x.length = x.length*scalar)).(net.edge) ##multiply all edgelengths by the scalar
+    decomp_pts = networkDecomposition(net)
+    (x -> (x.length = x.length/scalar)).(net.edge) ##Return all edgelengths back to the original
+
+    probs= repeat([0.0],length(pts))
+
+    ##Match decomposed parent trees to the appropriate parent tree and add their probabilities
+    for decomp in decomp_pts
+        pt_ind = findfirst(x->x[2]==decomp[3], pts)
+        pt_ind===nothing && error("A decomposed parent tree didn't map to a parent tree")
+
+        probs[pt_ind] += decomp[2]
+    end
+
+    return collect(zip( (x->x[1]).(pts),probs  ))
+end
