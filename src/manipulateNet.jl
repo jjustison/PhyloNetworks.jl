@@ -849,9 +849,6 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 
                 deletehybridedge!(multree,e,true,false,false,false,false)
                 
-                println("these are the clade nodes")
-                println(clade_nodes)
-
                 clade_edges=Edge[]
                 clade_leaves=Node[]
                 for clade_nd in clade_nodes
@@ -871,6 +868,7 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 push!(nd_copy.edge,e_copy)
 
                 e_copy.hybrid=false #This is no longer a hybrid edge
+                e_copy.isMajor=true #non-hybrid edges are always major
                 nd_copy.hybrid=false#This is no longer a hybrid node
 
                 ##Update the attributes of the tree that reflect the clade we added
@@ -884,8 +882,6 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 ##update hyb sorting
                 hyb_sorting[nd.number][parent_node.number]=Set(clade_leaves)
             end
-            println("")
-            println(multree)
         end
     end
     report_hybsorting && (return (multree,hyb_sorting))

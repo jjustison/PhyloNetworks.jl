@@ -67,7 +67,7 @@ function recursionPreOrder(net::HybridNetwork,
     # Find numbers of internal nodes
     nNodes = [n.number for n in net.node]
     nleaf = [n.number for n in net.leaf]
-    deleteat!(nNodes, indexin(nleaf, nNodes))
+    deleteat!(nNodes, sort(indexin(nleaf, nNodes)))
     MatrixTopologicalOrder(M, [n.number for n in net.nodes_changed], nNodes, nleaf, [n.name for n in net.leaf], indexation)
 end
 
@@ -355,7 +355,7 @@ function vcv(net::HybridNetwork;
     return(Cd)
 end
 
-function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
+#= function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
     pts=parentTrees(net;resetNodes=false) 
     
     tipnums=(x->x.number).(net.leaf)
@@ -442,7 +442,288 @@ function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
 
 return Cd
 
+end =#
+
+function vcvParent2(net::HybridNetwork, weights::Array{Float64,1})
+
+    ##Data Structure that will hold all the paths each tip could take from tip to root
+    #struct hyb_path
+    #    tip::String
+    #    hyb_sorting::tuple{Int64,Int64}[] ##This is how we allign the paths to a specific parent tree 
+    #    edges::Edge
+    #end
+
+    
+
 end
+
+
+function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64, Dict{Int64,Set{String}}}},1})
+
+    ##TODO. write a case that deals with this instead of erroring out.
+    any((x-> isempty(x.name)).(net.leaf)) && error("one of the leaves are named \"\". This is not allowed ")
+
+    ## Go thru edge by edge and keep track of all possible path combinations within that edge 
+    ## Then build vcv edge by edge by adding covariance in that edge weighted by the weight of the path with the same(?) hyb_sorting
+
+    V = convert(DataFrame,zeros(length(net.leaf),length(net.leaf))) ##Make empty matrix for VCV 
+    tipnames=(x->x.name).(net.leaf)
+    rename!(V, map(Symbol, tipnames))
+    V_map = Dict{String,Int64}(collect(zip(tipnames,(1:length(tipnames)))))
+
+    ##Data Structure that will hold all the paths within a given edge
+    #struct edge_path
+    #    tip_set::Vector{Set{String}} 
+    #    hyb_sorting::Vector{Tuple{Int64,Int64}}  ##This is how we will allign the paths to a specific parent tree 
+    #    probs::Vector{Float64} ## This has the probabilities of each hyb_sorting
+    #end
+
+    #Doing this in a way such that I don't need new objects. But ew on this Dictionary
+    edge_paths = Dict{
+        Int64, #This will have the edge numbers so we can find the Nodes we're interested in
+        Array{Tuple{ ## For a given Node
+            ##These things are vectors because each element will be one of the paths for that given node
+            Set{String}, #The set of names for that path
+            Dict{Int64, Dict{Int64,Set{String}}}, ## The_hyb sorting. The first Int is the hyb node number while the second is the parent of hyb node
+            Array{Int64,1} # The indices with all compatible parent trees
+        },1}
+    }()
+
+    levelorder!(net) ## put nodes in level order
+
+    weight_inds= Set(1:length(weights))
+
+    for nd in reverse(net.nodes_changed) ##go thru nodes in reverse level order, i.e. start at the tips.        
+        
+        
+        if nd.leaf ##If the node is a leaf...
+            ##Add the the parent edge to edge_paths
+            e = getparentedge(nd)
+
+
+            push!(edge_paths[e.number],
+                (
+                Set{String}([nd.name]),
+                Dict{Int64, Dict{Int64,Set{String}}}(), ##Empty Hyb_sorting
+                weight_inds ##Start with all weight
+                )
+            )
+        else ## Get the child edges and add the covariances
+            child_edges = getChildrenEdges(nd)
+            child_nds= (x-> (x.isChild1 && return(x.edge[1])) || return(x.edge[2]) ).(child_edges)
+
+            ##For each child node of the node of interest
+            for child_ind in 1:length(child_edges)
+                child_e =child_edges[child_ind]
+                child_nd=child_nds[child_ind]
+
+                path_set = edge_paths[child_e.number]
+                ##go thru each path and add covariances
+                for path_ind in (1:length(path_set)) ##For each path...
+                    path= path_set[path_ind]
+
+                    wt= sum((x-> ((weights[x])[1])).(path[3]))
+                    for taxon1 in path[1], taxon2 in path[1] ##add covariances
+                        (taxon1!=taxon2) && (V[V_map[taxon1],taxon2]+=child_e.length * wt)
+                    end
+                end
+            end
+
+            ## update edge_paths
+            if nd.hybrid ## If the node is a hybrid
+                ##at hybrid nodes we take all edge_paths and split them accordingly
+
+                child_e = getchildedge(nd)
+                paths = edge_paths[child_e.number]
+
+                par_nds = getparents(nd)
+                par_es= Array{Edge,1}()
+                for par_nd in par_nds ## Get the edges that lead to each parental node 
+                    edges = getChildrenEdges(par_nd)
+                    (x-> getchild(x)==nd && push!(par_e,x)).(edges)
+                end
+                length(par_e) != length(par_nd) && error("There is a mismatch between the number of parental nodes and edges")
+
+                for path in paths ##For each path...
+                    taxa = path[1]
+
+                    ##get all subsets of the taxa, then we can split them into going left and right
+                    taxa_sets = (x -> Set(x)).(collect(combinations(collect(taxa))))
+                    push!(taxa_sets,Set()) ##Add the empty set as nothing could go in a direction
+                    taxa_set_compliments = (x-> setdiff(taxa,x)).(taxa_sets)
+
+                    for taxa_ind in 1:length(taxa_sets) ## For each taxa set
+                        ## For these taxa sets there are two possible paths it could create... they go left or right
+                        
+                        ##Have taxa set go 'left'. i.e. par_nd[1]
+                        ##Make the hyb_sorting that for them going left
+                        h_sorting = edge_paths[child_e.number]
+                        h_sorting[nd.number][par_nds[1].number]=taxa_sets[taxa_ind]
+                        h_sorting[nd.number][par_nds[2].number]=taxa_set_compliments[taxa_ind]
+
+                        compat_trees=Array{Int64,1}()
+                        for tree_ind in path[3] ##Check compatability with the parent trees
+                            pt_hyb_sort=weights[tree_ind][2]
+                            ##The new path is compatible with the parent tree if they have the same hyb_sorting
+                            (pt_hyb_sort[nd.number] == h_sorting[nd.number]) && push!(compat_trees,tree_ind)
+                        end
+
+                        ##make the edge_path going left
+                        push!(edge_paths[par_e[1]],
+                            (taxa_sets[taxa_ind],
+                            h_sorting,
+                            compat_trees)
+                        )
+                        ##make the edge_path going right
+                        push!(edge_paths[par_e[2]],
+                        (taxa_set_compliments[taxa_ind],
+                        h_sorting,
+                        compat_trees)
+                        )
+                    end
+                end
+
+
+            else ## We are at a tree node
+
+                ##Tree nodes have are in-degree 1 and out-degree 2
+                ##We take the two child edges and combine them to make the parent edge edge_path
+                ## we need to do this for each combination of edge_paths for each child edges
+                ##We also need to check whether the two edge_paths are compatible with one another
+                for edge_path1 in e_p[child_edges[1].number], edge_path2 in e_p[child.eges[2].number]
+                    ##Look at the setdiffs of each name set
+                    ##If they have overlapping names then they are incompatible and can't be combined
+                    comb_names=union(edge_path1[1],edge_path2[1])
+                    ##Same length means disjoint sets
+                    (length(comb_names) != (length(edge_path1[1])+edge_path2[1])) && break
+
+
+                    ##Combine the valid parent tree sets for weights
+                    comb_weight_inds=intersect(edge_path1[3],edge_path2[3])
+                    isempty(comb_weight_inds) && break ## if there are no more valid parent trees then these can't be combined
+
+
+                    ##Look at the hyb_sortings and ensure they are compatibile 
+                    ## TODO TBH I'm not sure this is check is nessecary given the previous check but should look into it for optimization
+                    comb_hyb_sort = Dict{Int64, Dict{Int64,Set{String}}}() ##start empty and build. ##Slow since we rebuild from scratch. TODO optimize
+                    keys1=keys(edge_path1)
+                    keys2=keys(edge_path2)
+                    all_keys= union(keys1,keys2) ##get all the nodes involved in hyb_sorting for the two path sets
+                    for key in all_keys
+                        #check which hyb_sortings have the key
+                        in1= key in keys1
+                        in2= key in keys2
+
+                        #Case 1: the node is in both hyb_sortings
+                        if in1 && in2
+                            ##They need to have the same hyb sorting at that node to be compatibile
+                            if edge_path1[key]==edge_path2[key]
+                                comb_hyb_sort[key]=edge_path[key]
+                            else
+                                valid_combine=false
+                                break ##No need to keep looking at the keys if we have an invalid combine
+                            end
+
+                        end
+                        !valid_combine && break 
+
+                        #Case 2: The node is only in one of the hyb_sortings. add the hyb_sorting from the path that does have it
+                        (in1 && !in2) && (comb_hyb_sort[key] = edge_path1[key]) ## in edge_path1
+                        (in2 && !in1) && (comb_hyb_sort[key] = edge_path2[key]) ## in edge_path2
+                    end
+
+                    if valid_combine
+                            ##Combine hyb_paths
+                        push!(edge_paths[e.number],
+                            (
+                                comb_names,
+                                comb_hyb_sort,
+                                comb_weight_inds
+                            ) 
+                        )
+                    end
+                end
+
+            end
+        end
+
+        ##TODO write the covariances for the diagonal
+
+
+    end
+    return(V)
+end
+
+function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
+    pts=parentTrees(net;resetNodes=false) 
+
+    hyb_nd_nums = (x-> x.number).(net.hybrid)
+
+    V = convert(DataFrame,zeros(length(net.leaf),length(net.leaf))) ##Make empty matrix for VCV 
+    tipnames=(x->x.name).(net.leaf)
+    rename!(V, map(Symbol, tipnames))
+
+    for i in 1:length(pts)
+        pt=pts[i]
+        w=weights[i]
+
+        shared_paths = sharedPathMatrix(pt)
+        desc_mat = descendenceMatrix(pt)
+
+        ##DO stuff
+        #Look for all hybrid nodes (in network) - get their numbers
+        pt_hyb_nd = (net.hybrid)
+        
+
+            #For each hybrid node number:
+            for pt_nd in pt_hyb_nd_nums
+
+                desc_nd_ind = findall((x -> x == pt_nd) , desc_mat.nodeNumbersTopOrder) ## for parent trees this should always be at least a length of 2
+
+                
+                for hyb_num in desc_nd_ind
+                    #Get the length of the child edge: e_len
+                    child_e_length = getchildedge(pt_nd).length
+            
+                    #For each time it exists in the sharedPathMatrix/descendenceMatrix (Which to use?)
+                    #Find which tips are descendent - Store group in tip_descs
+                    # desc tips are in the *column* of hyb_nd_num in the descendenceMatrix.V
+                        #We need to store the group because everything within a group already has its vcv accounted for. We don't want to count it twice
+                        node_descs = findall((x-> x>0), desc_mat.V[:,desc_nd_ind]) 
+
+                ### OOOPS. We don't account for the downstream edge lengths that two tips might have in common outside of the child of the hybrid
+                ## We would need to check the desc matrix for other downstream nodes that have those as descs 
+
+
+                #for each group pairing
+                    #For each pair of species between the groups in tip_descs
+                        #Add e_len to the pair's vcv 
+                end
+
+            end
+        ###Convert to DataFrame
+
+
+
+
+
+        pt_names = names(vcv_p)
+        #Reorder the names of vcv_p to match V
+        vcv_p=vcv_p[:,names(V)] ##Change columns
+        ##Reorder the rows of vcv_p to match V
+        inds=[]
+        for name in names(V) 
+            ind = findfirst(x -> x==name,pt_names)
+            push!(inds,ind)
+        end
+        vcv_p=vcv_p[inds,:]
+
+        vcv_p=vcv_p.*w  ##Multiply the vcv matrix by the weight of the parent tree
+        V= V.+vcv_p ##Add the parent tree to the covaraiance matrix
+    end
+    return(V)
+end
+
 
 
 """
