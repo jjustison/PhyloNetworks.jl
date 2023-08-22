@@ -5,7 +5,11 @@ module PhyloNetworks
     # stdlib (standard libraries)
     using Dates
     using Distributed
-    using LinearAlgebra # for LowerTriangular, logdet, diag, mul!
+    using LinearAlgebra: diag, I, logdet, norm, LowerTriangular, mul!, lmul!, rmul!,
+            Diagonal, cholesky, qr, BLAS
+    # alternative: drop support for julia v1.4, because LinearAlgebra.rotate! requires julia v1.5
+    # using LinearAlgebra # bring all of LinearAlgebra into scope
+    # import LinearAlgebra.rotate! # allow re-definition of rotate!
     using Printf: @printf, @sprintf
     using Random
     using Statistics: mean, quantile, median
@@ -15,18 +19,21 @@ module PhyloNetworks
     using BioSymbols
     using Combinatorics: combinations, partitions
     using CSV
-    using DataFrames
+    using DataFrames # innerjoin new in v0.21
     using DataStructures # for updateInCycle with priority queue
     using Distributions #for RateVariationAcrossSites
+    using FASTX
+    using Functors: fmap
     using GLM # for the lm function
     using NLopt # for branch lengths optimization
     using StaticArrays
     using StatsBase # sample, coef etc.
-    using StatsFuns # logsumexp, logaddexp, various cdf
+    using StatsFuns # logsumexp, logaddexp, log2π, various cdf
     using StatsModels # re-exported by GLM. for ModelFrame ModelMatrix Formula etc
 
     import Base: show
     import GLM: ftest
+    import StatsModels: coefnames
 
     const DEBUGC = false # even more debug messages
     global CHECKNET = false # for debugging only
@@ -44,6 +51,10 @@ module PhyloNetworks
         writeSubTree!,
         hybridlambdaformat,
         deleteleaf!,
+        deleteaboveLSA!,
+        removedegree2nodes!,
+        shrink2cycles!,
+        shrink3cycles!,
         printEdges,
         printNodes,
         sorttaxa!,
@@ -53,17 +64,33 @@ module PhyloNetworks
         readTableCF,
         readTableCF!,
         writeTableCF,
+        mapAllelesCFtable,
         readInputTrees,
-        readNexusTrees,
+        readnexus_treeblock,
         summarizeDataCF,
         snaq!,
         readSnaqNetwork,
         topologyMaxQPseudolik!,
         topologyQPseudolik!,
+        ## getters
+        # fixit: add ancestors? getsibling? getdescendants (currently descendants)?
+        getroot,
+        isrootof,
+        isleaf,
+        isexternal,
+        isparentof,
+        ischildof,
+        hassinglechild,
+        getchild,
+        getchildren,
+        getchildedge,
+        getparent,
+        getparents,
+        getparentminor,
+        getparentedge,
+        getparentedgeminor,
+        getpartneredge,
         ## Network Manipulation
-        # getParent, getParents, getMajorParentEdge, getMinorParentEdge, getChildren,
-        # functions above: first rename them throughout to be consistent with other packages, like:
-        # parent child parents children parentmajor parentminor ancestor sibling offspring
         rootatnode!,
         rootonedge!,
         directEdges!,
@@ -73,7 +100,6 @@ module PhyloNetworks
         rotate!,
         setLength!,
         setGamma!,
-        mapAllelesCFtable,
         deleteHybridThreshold!,
         displayedTrees,
         majorTree,
@@ -86,6 +112,9 @@ module PhyloNetworks
         biconnectedComponents,
         blobDecomposition!,
         blobDecomposition,
+        nni!,
+        checkroot!,
+        treeedgecomponents,
         ## Network Bootstrap
         treeEdgesBootstrap,
         hybridDetection,
@@ -103,7 +132,7 @@ module PhyloNetworks
         pairwiseTaxonDistanceMatrix,
         calibrateFromPairwiseDistances!,
         ## Network PCM
-        phyloNetworklm,
+        phylolm,
         PhyloNetworkLinearModel,
         simulate,
         TraitSimulation,
@@ -119,8 +148,9 @@ module PhyloNetworks
         regressorHybrid,
         ancestralStateReconstruction,
         ReconstructedStates,
-        sigma2_estim,
-        mu_estim,
+        sigma2_phylo,
+        sigma2_within,
+        mu_phylo,
         lambda_estim,
         expectations,
         expectationsPlot,
@@ -147,14 +177,14 @@ module PhyloNetworks
         readfastatodna,
         stationary,
         empiricalDNAfrequencies,
-        nni!,
-        mapindividuals,
-        phyLiNC!,
+        # phyLiNC,
         # neighbor joining
         nj
 
     include("types.jl")
+    include("nloptsummary.jl")
     include("auxiliary.jl")
+    include("generate_topology.jl")
     include("update.jl")
     include("undo.jl")
     include("addHybrid_snaq.jl")
@@ -176,7 +206,7 @@ module PhyloNetworks
     include("pairwiseDistanceLS.jl")
     include("interop.jl")
     include("substitutionModels.jl")
-    include("biconnectedComponents.jl")
+    include("graph_components.jl")
     include("traitsLikDiscrete.jl")
     include("deprecated.jl")
     include("nj.jl")

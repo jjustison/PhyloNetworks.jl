@@ -34,7 +34,7 @@ First, we need to read the trait table as a DataFrame object:
 ```@repl parsimony
 using CSV, DataFrames
 csvfile = joinpath(dirname(pathof(PhyloNetworks)), "..","examples","Swadesh.csv");
-dat = CSV.read(csvfile);
+dat = CSV.File(csvfile) |> DataFrame;
 first(dat, 6) # to see the first 6 rows
 ```
 
@@ -61,7 +61,7 @@ net = readTopology("(Spanish,((English)#H1,(Norwegian,(German,#H1))));");
 using PhyloPlots, RCall
 R"svg(name('parsimony-fixed-net.svg'), width=4, height=4)"; # hide
 R"par"(mar = [0,0,0,0]);
-plot(net, :R, xlim=[0.8,7.5]);
+plot(net, xlim=[0.8,7.5]);
 R"dev.off"(); # hide
 nothing # hide
 ```

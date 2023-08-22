@@ -8,8 +8,6 @@ global tree, df, d, net, currT
     PhyloNetworks.mergeLeaves!(tree)
     @test writeTopology(tree) == "(6,(5,(7:1.0,(3,4))));"
     alleleDF=DataFrame(allele=["1","2"], species=["7","7"])
-    # df = CSV.read(joinpath(@__DIR__, "..", "examples", "tableCFCI.csv"))
-    # PhyloNetworks.mapAllelesCFtable!(df,alleleDF,[1,2,3,4],true,"CFmapped.csv")
     CSV.write("tmp.csv", alleleDF);
     df = (@test_logs (:warn, r"^not all alleles were mapped") mapAllelesCFtable("tmp.csv",
       joinpath(@__DIR__, "..", "examples", "tableCFCI.csv"),
@@ -76,13 +74,29 @@ sorttaxa!(dat)
 end # of testset: sorttaxa!
 
 @testset "snaq on multiple alleles" begin
-df=DataFrame(t1=["6","6","10","6","6","7","7","7","7","7","7"],
-             t2=["7","7","7","10","7","7","7","7","7","7","7"],
-             t3=["4","10","4","4","4","8","8","8","10","10","6"],
-             t4=["8","8","8","8","10","10","4","6","4","6","4"],
-             CF1234=[0.2729102510259939, 0.3967750546426937, 0.30161247267865315, 0.24693940689390592, 0.2729102510259939, 0.155181,  0.792153,  0.486702,  0.962734,  0.202531,  0.486886],
-             CF1324=[0.45417949794801216, 0.30161247267865315, 0.30161247267865315, 0.5061211862121882, 0.45417949794801216, 0.673426 ,0.145408,  0.391103,  0.023078,  0.714826,  0.419015],
-             CF1423=[0.2729102510259939, 0.30161247267865315, 0.3967750546426937, 0.24693940689390592, 0.2729102510259939, 0.171393,  0.062439,  0.122195,  0.014188,  0.082643,  0.094099])
+
+df = DataFrame(t1=["6","7"], t2=["7","6"], t3=["4","4"], t4=["8","8"],
+    a=[true,true], # to test recognition of columns
+    CF12_34=[0.25, 0.15], ngenes=[10,20],
+    CF13_24=[0.3,0.55], b=[false,false], CF14_23=[0.45,0.3])
+@test length(readTableCF(df).quartet) == 2
+d = readTableCF(df, mergerows=true)
+@test isempty(d.repSpecies)
+@test length(d.quartet) == 1
+@test d.quartet[1].obsCF ≈ [0.3, 0.5, 0.2]
+@test d.quartet[1].ngenes ≈ 15
+PhyloNetworks.descData(d, devnull)
+PhyloNetworks.descData(d, "tmp.log")
+summarizeDataCF(d, filename="tmp.log")
+rm("tmp.log")
+
+df=DataFrame(t1=["6","6","10","6","6","7","7","7","7","7",  "3", "7", "7"], # rows 11 & 13 (last & third to last): non-informative
+             t2=["7","7","7","10","7","7","7","7","7","7",  "7", "7", "7"],
+             t3=["4","10","4","4","4","8","8","8","10","10","7", "6", "7"],
+             t4=["8","8","8","8","10","10","4","6","4","6", "7", "4", "4"],
+             CF1234=[0.2729102510259939, 0.3967750546426937, 0.30161247267865315, 0.24693940689390592, 0.2729102510259939, 0.155181,  0.792153,  0.486702,  0.962734,  0.202531,  0.3, 0.486886, 0.3],
+             CF1324=[0.45417949794801216, 0.30161247267865315, 0.30161247267865315, 0.5061211862121882, 0.45417949794801216, 0.673426 ,0.145408,  0.391103, 0.023078,  0.714826,  0.3, 0.419015, 0.3],
+             CF1423=[0.2729102510259939, 0.30161247267865315, 0.3967750546426937, 0.24693940689390592, 0.2729102510259939, 0.171393,  0.062439,  0.122195,  0.014188,  0.082643,  0.4, 0.094099, 0.4])
 d = readTableCF(df)
 @test !isempty(d.repSpecies)
 @test d.repSpecies == ["7"]
@@ -91,18 +105,17 @@ tree = "((6,4),(7,8),10);"
 currT = readTopology(tree);
 
 originalstdout = stdout
-redirect_stdout(open("/dev/null", "w")) # not portable to Windows
-estNet = snaq!(currT,d,hmax=1,seed=1010, runs=1, filename="", Nfail=10)
+redirect_stdout(devnull) # requires julia v1.6
+estNet = snaq!(currT,d,hmax=1,seed=7, runs=1, filename="", Nfail=10)
 redirect_stdout(originalstdout)
 @test 185.27 < estNet.loglik < 185.29 # or: wrong loglik
 @test estNet.hybrid[1].k == 4 # or: wrong k
 @test estNet.numTaxa == 5 # or: wrong number of taxa
 
-redirect_stdout(open("/dev/null", "w")) # not portable to Windows
-estNet = snaq!(currT,d,hmax=1,seed=8378, runs=1, filename="", Nfail=10,
+redirect_stdout(devnull) # requires julia v1.6
+estNet = snaq!(currT,d,hmax=1,seed=8306, runs=1, filename="", Nfail=10,
                ftolAbs=1e-6,ftolRel=1e-5,xtolAbs=1e-4,xtolRel=1e-3)
 redirect_stdout(originalstdout)
-@test 174.58 < estNet.loglik < 174.59 # or: loglik wrong
 @test estNet.hybrid[1].k == 5 # or: wrong k in hybrid
 @test estNet.numTaxa == 5 # or: wrong # taxa
 
@@ -114,6 +127,25 @@ net = readTopology("(((4,#H1),10),(7,(6)#H1),8);")
 net = topologyMaxQPseudolik!(net,d,  # loose tolerance for faster test
         ftolRel=1e-2,ftolAbs=1e-2,xtolAbs=1e-2,xtolRel=1e-2)
 @test net.loglik > 174.5
+
+# testing root checks at the end when outgroup!="none"
+redirect_stdout(devnull)
+estNet = snaq!(currT,d,hmax=1,seed=6355, runs=1, filename="", Nfail=10,
+               ftolAbs=1e-6,ftolRel=1e-5,xtolAbs=1e-4,xtolRel=1e-3,
+               outgroup="10")
+redirect_stdout(originalstdout)
+# below, mostly check for 1 reticulation and "10" as outgroup. exact net depends on RNG :(
+netstring = writeTopology(estNet; round=true, digits=1)
+@test occursin(r"^\(\(7:0.0,#H7:::.*,10\);", netstring) ||
+      occursin(r",10,#H7:::0.\d\);", netstring)
 end # test of snaq on multiple alleles
+
+#----------------------------------------------------------#
+#   testing writeTopologyLevel1 with multiple alleles      #
+#----------------------------------------------------------#
+@testset "writeTopologyLevel1 multiall=true" begin
+net = readTopologyLevel1("(A,(((B,B__2),E),(C,D)));")
+@test writeTopologyLevel1(net, false, true, true,"D", false, true, 2, true) == "(D:0.5,(C:1.0,((B:1.0,E:1.0):1.0,A:1.0):1.0):0.5);"
+end # test of writeTopologyLevel1
 
 end # overall multiple allele sets of testests

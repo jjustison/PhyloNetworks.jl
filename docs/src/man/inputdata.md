@@ -67,7 +67,7 @@ mkpath("../assets/figures") # hide
 R"name <- function(x) file.path('..', 'assets', 'figures', x)" # hide
 R"svg(name('inputdata_gene3.svg'), width=4, height=3)" # hide
 R"par"(mar=[0,0,0,0])                          # hide
-plot(genetrees[3], :R); # tree for 3rd gene
+plot(genetrees[3]); # tree for 3rd gene
 R"dev.off()"                                   # hide
 nothing # hide
 ```
@@ -136,7 +136,7 @@ first to read the file and convert it to a 'DataFrame' object,
 and then to convert this DataFrame into a DataCF object.
 ```@repl qcf
 using CSV, DataFrames
-dat = CSV.read(buckyCFfile);
+dat = DataFrame(CSV.File(buckyCFfile); copycols=false);
 first(dat, 6) # to see the first 6 rows
 buckyCF = readTableCF(dat)
 writeTableCF(buckyCF)
@@ -166,7 +166,7 @@ astralfile = joinpath(dirname(pathof(PhyloNetworks)), "..","examples","astral.tr
 astraltree = readMultiTopology(astralfile)[102] # 102th tree: last tree here
 R"svg(name('inputdata_astraltree.svg'), width=4, height=3)" # hide
 R"par"(mar=[0,0,0,0]) # hide
-plot(astraltree, :R, showEdgeLength=true);
+plot(astraltree, showedgelength=true);
 R"dev.off()"; # hide
 nothing # hide
 ```

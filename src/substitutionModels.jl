@@ -116,14 +116,14 @@ in the data would be treated as missing value).
 
 ```jldoctest
 julia> getlabels(JC69([0.03], false))
-4-element Array{BioSymbols.DNA,1}:
+4-element Vector{BioSymbols.DNA}:
  DNA_A
  DNA_C
  DNA_G
  DNA_T
 
 julia> getlabels(HKY85([.5], repeat([0.25], 4)))
-4-element Array{BioSymbols.DNA,1}:
+4-element Vector{BioSymbols.DNA}:
  DNA_A
  DNA_C
  DNA_G
@@ -200,7 +200,7 @@ rate matrix Q:
        T  0.3226  0.2419  0.4839       *
 
 julia> PhyloNetworks.P(m1, 0.2)
-4×4 StaticArrays.MArray{Tuple{4,4},Float64,2,16} with indices SOneTo(4)×SOneTo(4):
+4×4 StaticArraysCore.MMatrix{4, 4, Float64, 16} with indices SOneTo(4)×SOneTo(4):
  0.81592    0.0827167  0.0462192  0.0551445
  0.0551445  0.831326   0.0827167  0.0308128
  0.0308128  0.0827167  0.831326   0.0551445
@@ -212,7 +212,7 @@ Juke-Cantor example:
 julia> m1 = JC69([1.]);
 
 julia> PhyloNetworks.P(m1, 0.2)
-4×4 StaticArrays.MArray{Tuple{4,4},Float64,2,16} with indices SOneTo(4)×SOneTo(4):
+4×4 StaticArraysCore.MMatrix{4, 4, Float64, 16} with indices SOneTo(4)×SOneTo(4):
  0.824446   0.0585179  0.0585179  0.0585179
  0.0585179  0.824446   0.0585179  0.0585179
  0.0585179  0.0585179  0.824446   0.0585179
@@ -240,14 +240,14 @@ rate low→high α=1.0
 rate high→low β=2.0
 
 julia> PhyloNetworks.P!(Matrix{Float64}(undef,2,2), m1, 0.3) # fills an uninitialized 2x2 matrix of floats
-2×2 Array{Float64,2}:
+2×2 Matrix{Float64}:
  0.80219  0.19781
  0.39562  0.60438
 
 julia> m2 = JC69([1.]);
 
 julia> PhyloNetworks.P!(Matrix{Float64}(undef,4,4), m2, 0.2)
-4×4 Array{Float64,2}:
+4×4 Matrix{Float64}:
  0.824446   0.0585179  0.0585179  0.0585179
  0.0585179  0.824446   0.0585179  0.0585179
  0.0585179  0.0585179  0.824446   0.0585179
@@ -438,10 +438,10 @@ struct EqualRatesSubstitutionModel{T} <: TraitSubstitutionModel{T}
     eigeninfo::Vector{Float64}
     function EqualRatesSubstitutionModel{T}(k::Int, rate::Vector{Float64},
         label::Vector{T}, eigeninfo::Vector{Float64}) where T
-        k >= 2 || error("parameter k must be greater than or equal to 2")
+        @assert length(label)==k "incorrect number of labels: k=$k, labels: $label"
+        @assert k >= 2 "need k >= 2 category labels. labels: $label"
         @assert length(rate)==1 "rate must be a vector of length 1"
         rate[1] > 0 || error("parameter α (rate) must be positive")
-        @assert length(label)==k "label vector of incorrect length"
         new(k, rate, label, eigeninfo)
     end
 end
@@ -501,10 +501,10 @@ Binary Trait Substitution Model:
 rate 0→1 α=1.0
 rate 1→0 β=2.0
 
-julia> using Random; Random.seed!(12345);
+julia> using Random; Random.seed!(13);
 
 julia> randomTrait(m1, 0.2, [1,2,1,2,2])
-5-element Array{Int64,1}:
+5-element Vector{Int64}:
  1
  2
  1
@@ -554,17 +554,17 @@ julia> m1 = BinaryTraitSubstitutionModel(1.0, 2.0, ["low","high"]);
 
 julia> net = readTopology("(((A:4.0,(B:1.0)#H1:1.1::0.9):0.5,(C:0.6,#H1:1.0::0.1):1.0):3.0,D:5.0);");
 
-julia> using Random; Random.seed!(1234);
+julia> using Random; Random.seed!(95);
 
 julia> trait, lab = randomTrait(m1, net)
 ([1 2 … 1 1], ["-2", "D", "-3", "-6", "C", "-4", "H1", "B", "A"])
 
 julia> trait
-1×9 Array{Int64,2}:
+1×9 Matrix{Int64}:
  1  2  1  1  2  2  1  1  1
 
 julia> lab
-9-element Array{String,1}:
+9-element Vector{String}:
  "-2" 
  "D"  
  "-3" 
@@ -1130,8 +1130,10 @@ struct RVASInv <: RateVariationAcrossSites
     lograteweight::StaticArrays.MVector{2,Float64}
 end
 function RVASInv(pinv=0.05::Float64)
+    r = StaticArrays.MVector{2,Float64}(undef) # rates
+    r[1] = 0.0 # invariable category
     obj = RVASInv(StaticArrays.MVector{1,Float64}(pinv),
-            StaticArrays.MVector{2,Float64}(undef), # rates
+            r,
             StaticArrays.MVector{2,Float64}(undef)) # log weights
     setpinv!(obj, pinv) # checks for 0 <= pinv < 1
     return obj
@@ -1148,10 +1150,12 @@ end
 function RVASGammaInv(pinv::Float64, alpha::Float64, ncat::Int)
     @assert ncat > 1 "ncat must be 2 or more for the Gamma+I model"
     s = 1+ncat
+    r = StaticArrays.MVector{s,Float64}(undef) # rates
+    r[1] = 0.0 # invariable category
     obj = RVASGammaInv{s}(
             StaticArrays.MVector{1,Float64}(pinv),
             StaticArrays.MVector{1,Float64}(alpha), ncat,
-            StaticArrays.MVector{s,Float64}(undef), # rates
+            r,
             StaticArrays.MVector{s,Float64}(undef)) # log weights
     setpinvalpha!(obj, pinv, alpha) # checks for α >= 0 and 0 <= pinv < 1
     return obj
@@ -1224,6 +1228,16 @@ function setpinv!(obj::RVASGammaInv{S}, pinv::Float64) where S
     return obj
 end
 
+"""
+    setpinvalpha!(obj, pinv, alpha)
+
+Set the proportion of invariable sites `pinv` and the `alpha` parameter for
+the discretized gamma distribution in a model `obj` of type `RVASGammaInv{S}`.
+Update the rate multipliers & weights accordingly.
+The mean of the distribution is constrained to 1.
+
+Return the modified object.
+"""
 function setpinvalpha!(obj::RVASGammaInv{S}, pinv::Float64, alpha::Float64) where S
     @assert 0.0 <= pinv < 1.0 "pinv must be in [0,1)"
     @assert alpha >= 0 "alpha must be >= 0"

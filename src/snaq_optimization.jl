@@ -1199,7 +1199,7 @@ or `failures<Nfail`, or `stillmoves=true`:
 end while
 
 After choosing the best network `newT`, we do one last more thorough optimization of branch lengths with `optBL`,
-we change non identifiable branch lengths to -1 and return `newT`
+we change non identifiable branch lengths to -1 (only in debug mode) and return `newT`
 """
 function optTopLevel!(currT::HybridNetwork, liktolAbs::Float64, Nfail::Integer, d::DataCF, hmax::Integer,
                       ftolRel::Float64, ftolAbs::Float64, xtolRel::Float64, xtolAbs::Float64,
@@ -1337,7 +1337,7 @@ function optTopLevel!(currT::HybridNetwork, liktolAbs::Float64, Nfail::Integer, 
         printEdges(newT)
         printPartitions(newT)
         printNodes(newT)
-        writeTopologyLevel1(newT,true)
+        writeTopologyLevel1(newT,true) ## this changes non-identifiable BLs in newT to -1
     end
     if CHECKNET && !isempty(d.repSpecies)
         checkTop4multAllele(newT) || error("newT not suitable for multiple alleles at the very end")
@@ -1575,7 +1575,7 @@ function optTopRuns!(currT0::HybridNetwork, liktolAbs::Float64, Nfail::Integer, 
             logstr *= "\nFINISHED SNaQ for run $(i), -loglik of best $(best.loglik)\n"
             verbose && print(stdout, logstr)
             if writelog_1proc
-              logstr = writeTopologyLevel1(best,outgroup=outgroup, printID=true, multall=!isempty(d.repSpecies))
+              logstr = writeTopologyLevel1(best,outgroup=outgroup, printID=true, multall=!isempty(d.repSpecies)) ## printID=true calls setNonIdBL
               logstr *= "\n---------------------\n"
               write(logfile, logstr)
               flush(logfile)
@@ -1622,7 +1622,7 @@ function optTopRuns!(currT0::HybridNetwork, liktolAbs::Float64, Nfail::Integer, 
         catch
             write(s,"""Bug found when trying to obtain networks with modified hybrid/gene flow direction.
                        To help debug these cases and get other similar estimated networks for your analysis,
-                       please send the estimated network in parenthetical format to claudia@stat.wisc.edu
+                       please send the estimated network in parenthetical format to solislemus@wisc.edu
                        with the subject BUG IN NETWORKS FILE. You can get this network from the .out file.
                        You can also post this problem to the google group, or github issues. Thank you!\n""")
         end
@@ -1654,9 +1654,6 @@ function optTopRuns!(currT0::HybridNetwork, liktolAbs::Float64, Nfail::Integer, 
     end
 
     setNonIdBL!(maxNet)
-    writelog &&
-    write(logfile,"\nMaxNet is $(writeTopologyLevel1(maxNet,printID=true, multall=!isempty(d.repSpecies))) \nwith -loglik $(maxNet.loglik)\n")
-    print(stdout,"\nMaxNet is $(writeTopologyLevel1(maxNet,printID=true, multall=!isempty(d.repSpecies))) \nwith -loglik $(maxNet.loglik)\n")
 
     if outgroup != "none"
         try
@@ -1675,6 +1672,11 @@ function optTopRuns!(currT0::HybridNetwork, liktolAbs::Float64, Nfail::Integer, 
     else
         checkRootPlace!(maxNet,verbose=false) #leave root in good place after snaq
     end
+
+    writelog &&
+    write(logfile,"\nMaxNet is $(writeTopologyLevel1(maxNet,printID=true, multall=!isempty(d.repSpecies))) \nwith -loglik $(maxNet.loglik)\n")
+    print(stdout,"\nMaxNet is $(writeTopologyLevel1(maxNet,printID=true, multall=!isempty(d.repSpecies))) \nwith -loglik $(maxNet.loglik)\n")
+
     s = writelog ? open(juliaout,"w") : stdout
     str = writeTopologyLevel1(maxNet, printID=true,multall=!isempty(d.repSpecies)) * """
      -Ploglik = $(maxNet.loglik)
@@ -1907,6 +1909,26 @@ function snaq!(currT0::HybridNetwork, d::DataCF;
                       verbose, closeN, Nmov0, runs, outgroup, filename,seed,probST)
     if(!isempty(d.repSpecies))
         mergeLeaves!(net)
+    end
+
+    # checking root again after merging leaves. This is a band aid.
+    # To-do: rethink order of check root and merge leaves inside optTopRuns
+    if outgroup != "none"
+        try
+            checkRootPlace!(net,outgroup=outgroup) ## keeps all attributes
+        catch err
+            if isa(err, RootMismatch)
+                 println("RootMismatch: ", err.msg,
+                 """\nThe estimated network has hybrid edges that are incompatible with the desired outgroup.
+                    Reverting to an admissible root position.
+                    """)
+            else
+                println("error trying to reroot: ", err.msg);
+            end
+            checkRootPlace!(net,verbose=false) # message about problem already printed above
+        end
+    else
+        checkRootPlace!(net,verbose=false) #leave root in good place after snaq
     end
     return net
 end

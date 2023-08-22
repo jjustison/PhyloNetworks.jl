@@ -109,6 +109,30 @@ const SSM = StatisticalSubstitutionModel
 # fasta constructor: from net, fasta filename, modsymbol, and maxhybrid
 # Works for DNA in fasta format. Probably need different versions for
 # different kinds of data (snp, amino acids). Similar to fitdiscrete()
+"""
+    StatisticalSubstitutionModel(model::SubstitutionModel,
+            ratemodel::RateVariationAcrossSites,
+            net::HybridNetwork, trait::AbstractVector,
+            siteweight=nothing::Union{Nothing, Vector{Float64}},
+            maxhybrid=length(net.hybrid)::Int)
+
+Inner constructor. Makes a deep copy of the input model, rate model.
+Warning: does *not* make a deep copy of the network:
+modification of the `object.net` would modify the input `net`.
+Assumes that the network has valid gamma values (to extract displayed trees).
+
+    StatisticalSubstitutionModel(net::HybridNetwork, fastafile::String,
+            modsymbol::Symbol, rvsymbol=:noRV::Symbol,
+            ratecategories=4::Int;
+            maxhybrid=length(net.hybrid)::Int)
+
+Constructor from a network and a fasta file.
+The model symbol should be one of `:JC69`, `:HKY85`, `:ERSM` or `:BTSM`.
+The `rvsymbol` should be as required by [`RateVariationAcrossSites`](@ref).
+
+The network's gamma values are modified if they are missing. After that,
+a deep copy of the network is passed to the inner constructor.
+"""
 function StatisticalSubstitutionModel(net::HybridNetwork, fastafile::String,
         modsymbol::Symbol, rvsymbol=:noRV::Symbol, ratecategories=4::Int;
         maxhybrid=length(net.hybrid)::Int)
@@ -124,6 +148,7 @@ function StatisticalSubstitutionModel(net::HybridNetwork, fastafile::String,
     model = defaultsubstitutionmodel(net, modsymbol, data, siteweights)
     ratemodel = RateVariationAcrossSites(rvsymbol, ratecategories)
     dat2 = traitlabels2indices(view(data, :, 2:size(data,2)), model)
+    # check_matchtaxonnames makes a deep copy of the network
     o, net = check_matchtaxonnames!(data[:,1], dat2, net) # calls resetNodeNumbers, which calls preorder!
     trait = dat2[o]
     obj = StatisticalSubstitutionModel(model, ratemodel, net, trait, siteweights,
@@ -146,17 +171,74 @@ function Base.show(io::IO, obj::SSM)
         print(io, "\nlog-likelihood: $(round(obj.loglik, digits=5))")
     end
 end
-function showdata(io::IO, obj::SSM)
+"""
+    showdata(io::IO, obj::SSM, fullsiteinfo=false::Bool)
+
+Return information about the data in an SSM object:
+number of species, number or traits or sites, number of distinct patterns,
+and more information if `fullsiteinfo` is true:
+number sites with missing data only,
+number of invariant sites, number of sites with 2 distinct states,
+number of parsimony-informative sites (with 2+ states being observed in 2+ tips),
+number of sites with some missing data, and
+overall proportion of entries with missing data.
+
+Note: Missing is not considered an additional state. For example,
+if a site contains some missing data, but all non-missing values take the same
+state, then this site is counted in the category "invariant".
+"""
+function showdata(io::IO, obj::SSM, fullsiteinfo=false::Bool)
     disp =  "data:\n  $(length(obj.trait)) species"
-    ns = round(obj.totalsiteweight)
-    ns = (isapprox(obj.totalsiteweight, ns, atol=1e-5) ? Int(ns) : ns)
+    ns = obj.totalsiteweight
+    ns = (isapprox(ns, round(ns), atol=1e-5) ? Int(round(ns)) : ns)
     disp *= (ns ≈ 1 ? "\n  $ns trait" : "\n  $ns sites")
-    if !isapprox(obj.nsites, obj.totalsiteweight)
+    if !isapprox(obj.nsites, ns, atol=1e-5)
         disp *= "\n  $(obj.nsites) distinct patterns"
     end
-    # fixit: add info about # sites with missing values, invariable sites, etc.
-    # but only if there are more than 1 site, e,g, if ns>1
     print(io, disp)
+    (fullsiteinfo && obj.nsites != 1) || return nothing
+    # if more than 1 trait and if the user wants full information:
+    nsv = MVector{6,Float64}(undef) # vector to count number of
+    # sites with: 0, 1, 2 states, parsimony informative, with 1+ missing value,
+    # missing values across all sites.
+    fill!(nsv, 0.0)
+    text = ["sites with no data", "invariant sites",
+            "sites with 2 distinct states", "parsimony-informative sites",
+            "sites with 1 or more missing values", "missing values overall"]
+    trackstates = zeros(Int, nstates(obj.model)) # states seen at a given site
+    ntaxa = length(obj.trait)
+    for i in 1:(obj.nsites) # over sites
+        sweight = (isnothing(obj.siteweight) ? 1.0 : obj.siteweight[i])
+        missone = false
+        fill!(trackstates, 0)
+        for j in 1:ntaxa # over taxa
+            data = obj.trait[j][i]
+            if ismissing(data)
+                nsv[6] += sweight # total number of missing values
+                missone && continue
+                nsv[5] += sweight # sites with 1+ missing values
+                missone = true
+            else # mark state seen
+                trackstates[data] += 1 # 1 more taxon
+            end
+        end
+        # add site's weight to appropriate nstates
+        nstates = sum(trackstates .> 0)
+        if nstates < 3
+            nsv[nstates+1] += sweight
+        end
+        if nstates>1 # are there 2 states observed at 2+ taxa each?
+            nstates_2taxa = sum(trackstates .> 1)
+            if nstates_2taxa>1
+                nsv[4] += sweight
+            end
+        end
+    end
+    nsv_r = map(x -> begin y=round(x); (isapprox(y,x,atol=1e-5) ? Int(y) : x); end, nsv)
+    for i in 1:5
+        print(io, "\n  $(nsv_r[i]) $(text[i]) ($(round(100*nsv[i]/ns, digits=2))%)")
+    end
+    print(io, "\n  $(round(100*nsv[6]/(ns*ntaxa), digits=2))% $(text[6])")
 end
 # nobs: nsites * nspecies, minus any missing, but ignores correlation between species
 # fixit: extend the StatsBase methods
@@ -350,10 +432,10 @@ end
 #dat::DataFrame with rate model version
 function fitdiscrete(net::HybridNetwork, model::SubstitutionModel,
     ratemodel::RateVariationAcrossSites, dat::DataFrame; kwargs...)
-    i = findfirst(isequal(:taxon), DataFrames.names(dat))
-    if i===nothing i = findfirst(isequal(:species), DataFrames.names(dat)); end
+    i = findfirst(isequal(:taxon), DataFrames.propertynames(dat))
+    if i===nothing i = findfirst(isequal(:species), DataFrames.propertynames(dat)); end
     if i===nothing i=1; end # first column if no column "taxon" or "species"
-    j = findfirst(isequal(:trait), DataFrames.names(dat))
+    j = findfirst(isequal(:trait), DataFrames.propertynames(dat))
     if j===nothing j=2; end
     if i==j
         error("""expecting taxon names in column 'taxon', or 'species' or
@@ -683,7 +765,7 @@ function discrete_corelikelihood_trait!(obj::SSM, t::Integer, ci::Integer, ri::I
             end
         else # forward likelihood = product of direct likelihood over all children edges
             for e in n.edge
-                n == getParent(e) || continue # to next edge if n is not parent of e
+                n == getparent(e) || continue # to next edge if n is not parent of e
                 forwardlik[:,nnum] .+= view(directlik, :,e.number)
             end
         end
@@ -694,7 +776,7 @@ function discrete_corelikelihood_trait!(obj::SSM, t::Integer, ci::Integer, ri::I
         # if we keep going, n is not the root
         # calculate direct likelihood on the parent edge of n
         for e in n.edge
-            if n == getChild(e)
+            if n == getchild(e)
                 lt = view(obj.logtrans, :,:,e.number, ri)
                 for i in 1:k # state at parent node
                     directlik[i,e.number] = logsumexp(view(lt,i,:) + view(forwardlik,:,nnum))
@@ -709,8 +791,62 @@ end
 """
     posterior_logtreeweight(obj::SSM, trait = 1)
 
-Return an array A such that A[t] = log of P(tree `t` and trait `trait`)
-if a single `trait` is requested, or A[i,t]= log of P(tree `t` and trait `i`)
+Array A of log-posterior probabilities for each tree displayed in the network:
+such that A[t] = log of P(tree `t` | trait `trait`)
+if a single `trait` is requested, or A[t,i]= log of P(tree `t` | trait `i`)
+if `trait` is a vector or range (e.g. `trait = 1:obj.nsites`).
+These probabilities are conditional on the model parameters in `obj`.
+
+Displayed trees are listed in the order in which they are stored in the fitted
+model object `obj`.
+
+**Precondition**: `_loglikcache` updated by [`discrete_corelikelihood!`](@ref)
+
+# examples
+
+```jldoctest
+julia> net = readTopology("(((A:2.0,(B:1.0)#H1:0.1::0.9):1.5,(C:0.6,#H1:1.0::0.1):1.0):0.5,D:2.0);");
+
+julia> m1 = BinaryTraitSubstitutionModel([0.1, 0.1], ["lo", "hi"]); # arbitrary rates
+
+julia> using DataFrames
+
+julia> dat = DataFrame(species=["C","A","B","D"], trait=["hi","lo","lo","hi"]);
+
+julia> fit = fitdiscrete(net, m1, dat); # optimized rates: α=0.27 and β=0.35
+
+julia> pltw = PhyloNetworks.posterior_logtreeweight(fit);
+
+julia> round.(exp.(pltw), digits=5) # posterior trees probabilities (sum up to 1)
+2-element Vector{Float64}:
+ 0.91983
+ 0.08017
+
+julia> round.(exp.(fit.priorltw), digits=4) # the prior tree probabilities are similar here (tiny data set!)
+2-element Vector{Float64}:
+ 0.9
+ 0.1
+```
+"""
+function posterior_logtreeweight(obj::SSM, trait = 1)
+    # ts[site,tree] = log P(data and tree) at site, integrated over rates
+    d = length(size(trait)) # 0 if single trait, 1 if vector of several traits
+    ts = dropdims(mapslices(logsumexp, view(obj._loglikcache, trait,:,:),
+                            dims=d+1); dims=1)
+    if d>0 ts = permutedims(ts); end # now: ts[tree] or ts[tree,site]
+    siteliks = mapslices(logsumexp, ts, dims=1) # 1 x ntraits array (or 1-element vector)
+    ts .-= siteliks
+    return ts
+end
+
+"""
+    posterior_loghybridweight(obj::SSM, hybrid_name, trait = 1)
+    posterior_loghybridweight(obj::SSM, edge_number, trait = 1)
+
+Log-posterior probability for all trees displaying the minor parent edge
+of hybrid node named `hybrid_name`, or displaying the edge number `edge_number`.
+That is: log of P(hybrid minor parent | trait) if a single `trait` is requested,
+or A[i]= log of P(hybrid minor parent | trait `i`)
 if `trait` is a vector or range (e.g. `trait = 1:obj.nsites`).
 These probabilities are conditional on the model parameters in `obj`.
 
@@ -729,31 +865,30 @@ julia> dat = DataFrame(species=["C","A","B","D"], trait=["hi","lo","lo","hi"]);
 
 julia> fit = fitdiscrete(net, m1, dat); # optimized rates: α=0.27 and β=0.35
 
-julia> pltw = PhyloNetworks.posterior_logtreeweight(fit)
-2-element Array{Float64,1}:
- -0.08356519024776699
- -2.523619878044531  
+julia> plhw = PhyloNetworks.posterior_loghybridweight(fit, "H1");
 
-julia> exp.(pltw) # posterior trees probabilities (sum up to 1)
-2-element Array{Float64,1}:
- 0.9198311206979973 
- 0.08016887930200293
+julia> round(exp(plhw), digits=5) # posterior probability of going through minor hybrid edge
+0.08017
 
-julia> round.(exp.(fit.priorltw), digits=4) # the prior tree probabilities are similar here (tiny data set!)
-2-element Array{Float64,1}:
- 0.9
- 0.1
+julia> hn = net.node[3]; getparentedgeminor(hn).gamma # prior probability
+0.1
 ```
 """
-function posterior_logtreeweight(obj::SSM, trait = 1)
-    # ts[site,tree] = log P(data and tree) at site, integrated over rates
-    d = length(size(trait)) # 0 if single trait, 1 if vector of several traits
-    ts = dropdims(mapslices(logsumexp, view(obj._loglikcache, trait,:,:),
-                            dims=d+1); dims=1)
-    if d>0 ts = permutedims(ts); end # now: ts[tree] or ts[tree,site]
-    siteliks = mapslices(logsumexp, ts, dims=1) # 1 x ntraits array (or 1-element vector)
-    ts .-= siteliks
-    return ts
+function posterior_loghybridweight(obj::SSM, hybridname::String, trait = 1)
+    hn_index = findfirst(n -> n.name == hybridname, obj.net.node)
+    isnothing(hn_index) && error("node named $hybridname not found")
+    hn = obj.net.node[hn_index]
+    hn.hybrid || error("node named $hybridname is not a hybrid node")
+    me = getparentedgeminor(hn)
+    posterior_loghybridweight(obj, me.number, trait)
+end
+function posterior_loghybridweight(obj::SSM, edgenum::Integer, trait = 1)
+    tpp = posterior_logtreeweight(obj, trait) # size: (ntree,) or (ntree,ntraits)
+    hasedge = tree -> any(e.number == edgenum for e in tree.edge)
+    tokeep = map(hasedge, obj.displayedtree)
+    tppe = view(tpp, tokeep, :) # makes it a matrix
+    epp = dropdims(mapslices(logsumexp, tppe, dims=1); dims=2)
+    return (size(epp)==(1,) ? epp[1] : epp) # scalar or vector
 end
 
 """
@@ -916,23 +1051,23 @@ julia> dat = DataFrame(species=["C","A","B","D"], trait=["hi","lo","lo","hi"]);
 julia> fit1 = fitdiscrete(net, m1, dat);
 
 julia> asr = ancestralStateReconstruction(fit1)
-9×4 DataFrames.DataFrame
-│ Row │ nodenumber │ nodelabel │ lo       │ hi       │
-│     │ Int64      │ String    │ Float64  │ Float64  │
-├─────┼────────────┼───────────┼──────────┼──────────┤
-│ 1   │ 1          │ A         │ 1.0      │ 0.0      │
-│ 2   │ 2          │ B         │ 1.0      │ 0.0      │
-│ 3   │ 3          │ C         │ 0.0      │ 1.0      │
-│ 4   │ 4          │ D         │ 0.0      │ 1.0      │
-│ 5   │ 5          │ 5         │ 0.286018 │ 0.713982 │
-│ 6   │ 6          │ 6         │ 0.319454 │ 0.680546 │
-│ 7   │ 7          │ 7         │ 0.168548 │ 0.831452 │
-│ 8   │ 8          │ 8         │ 0.767361 │ 0.232639 │
-│ 9   │ 9          │ H1        │ 0.782777 │ 0.217223 │
+9×4 DataFrame
+ Row │ nodenumber  nodelabel  lo        hi
+     │ Int64       String     Float64   Float64
+─────┼───────────────────────────────────────────
+   1 │          1  A          1.0       0.0
+   2 │          2  B          1.0       0.0
+   3 │          3  C          0.0       1.0
+   4 │          4  D          0.0       1.0
+   5 │          5  5          0.286021  0.713979
+   6 │          6  6          0.319456  0.680544
+   7 │          7  7          0.16855   0.83145
+   8 │          8  8          0.767359  0.232641
+   9 │          9  H1         0.782776  0.217224
 
 julia> using PhyloPlots
 
-julia> plot(fit1.net, :R, nodeLabel = asr[!,[:nodenumber, :lo]], tipOffset=0.2); # pp for "lo" state
+julia> plot(fit1.net, nodelabel = asr[!,[:nodenumber, :lo]], tipoffset=0.2); # pp for "lo" state
 ```
 """
 function ancestralStateReconstruction(obj::SSM, trait::Integer = 1)
@@ -992,7 +1127,7 @@ function discrete_backwardlikelihood_trait!(obj::SSM, t::Integer, ri::Integer)
     k = nstates(obj.model)
     fill!(backwardlik, 0.0) # re-initialize for each trait, each iteration
     bkwtmp = Vector{Float64}(undef, k) # to hold bkw lik without parent edge transition
-    if typeof(obj.model) == NASM
+    if typeof(obj.model) <: NASM
         logprior = log.(stationary(obj.model))
     else #trait models
         logprior = [-log(k) for i in 1:k] # uniform prior at root
@@ -1003,11 +1138,11 @@ function discrete_backwardlikelihood_trait!(obj::SSM, t::Integer, ri::Integer)
         if ni == 1 # n is the root
             backwardlik[:,nnum] = logprior
         else
-            pe = getMajorParentEdge(n)
-            pn = getParent(pe)
+            pe = getparentedge(n)
+            pn = getparent(pe)
             bkwtmp[:] = backwardlik[:,pn.number] # use bktmp's original memory
             for se in pn.edge
-                if se != pe && pn == getParent(se) # then se is sister edge to pe
+                if se != pe && pn == getparent(se) # then se is sister edge to pe
                     bkwtmp .+= view(directlik, :,se.number)
                 end
             end
@@ -1034,12 +1169,12 @@ julia> using DataFrames
 julia> dat = DataFrame(trait1 = ["A", "C", "A", missing]); # 4×1 DataFrame
 
 julia> PhyloNetworks.learnlabels(:BTSM, dat)
-2-element Array{String,1}:
+2-element Vector{String}:
  "A"
  "C"
 
 julia> PhyloNetworks.learnlabels(:JC69, dat)
-2-element Array{String,1}:
+2-element Vector{String}:
  "A"
  "C"
 ```

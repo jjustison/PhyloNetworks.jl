@@ -22,15 +22,38 @@ Private = false
 Order   = [:type]
 ```
 
-## utilities
+## basic utilities
 
 ```@docs
 tipLabels
-sorttaxa!
 printEdges
 printNodes
-summarizeDataCF
+getroot
+isrootof
+#isleaf
+#isexternal
+isparentof
+#ischildof
+hassinglechild
+getchild
+#getchildren
+#getchildedge
+getparent
+#getparents
+#getparentminor
+#getparentedge
+#getparentedgeminor
+getpartneredge
+getNodeAges
+pairwiseTaxonDistanceMatrix
+```
+
+## utilities to manipulate networks
+
+```@docs
+sorttaxa!
 directEdges!
+checkroot!
 preorder!
 cladewiseorder!
 rootatnode!
@@ -39,15 +62,15 @@ hybridatnode!
 setLength!
 setGamma!
 deleteleaf!
+deleteaboveLSA!
+removedegree2nodes!
+shrink2cycles!
+shrink3cycles!
 deleteHybridThreshold!
 rotate!
-getindex(::TraitSimulation, ::Symbol)
-getNodeAges
-pairwiseTaxonDistanceMatrix
 biconnectedComponents
 blobDecomposition
-getlabels
-nparams
+treeedgecomponents
 nni!
 ```
 
@@ -59,7 +82,7 @@ readTopology
 readTopologyLevel1
 readInputTrees
 readMultiTopology
-readNexusTrees
+readnexus_treeblock
 readSnaqNetwork
 readTrees2CF
 countquartetsintrees
@@ -80,6 +103,7 @@ mapAllelesCFtable
 snaq!
 topologyMaxQPseudolik!
 topologyQPseudolik!
+summarizeDataCF
 fittedQuartetCF
 bootsnaq
 calibrateFromPairwiseDistances!
@@ -105,24 +129,26 @@ hybridBootstrapSupport
 ## continuous trait evolution
 
 ```@docs
-simulate
-shiftHybrid
-getShiftEdgeNumber
-getShiftValue
-phyloNetworklm
-sigma2_estim
-mu_estim
+phylolm
+sigma2_phylo
+sigma2_within
+mu_phylo
 lambda_estim
 ancestralStateReconstruction
 expectations
 predint
 expectationsPlot
 predintPlot
+simulate
+shiftHybrid
+getShiftEdgeNumber
+getShiftValue
 descendenceMatrix
 regressorShift
 regressorHybrid
 sharedPathMatrix
 vcv
+getindex(::TraitSimulation, ::Symbol)
 ```
 
 ## discrete trait evolution
@@ -135,9 +161,9 @@ randomTrait
 randomTrait!
 fitdiscrete
 maxParsimonyNet
+getlabels
 nstates
+nparams
 stationary
 empiricalDNAfrequencies
-mapindividuals
-phyLiNC!
 ```
