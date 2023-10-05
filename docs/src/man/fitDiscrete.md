@@ -167,7 +167,7 @@ which is part of the network (along with branch lengths).
 Here, this prior probability of trait inheritance via gene flow is:
 
 ```@repl fitdiscrete_trait
-net.edge[6].gamma # the minor hybrid edge was edge 6, from above
+net.edge[5].gamma # the minor hybrid edge was edge 5, from above
 ```
 
 We can compare this to the posterior probability, and get a Bayes factor
