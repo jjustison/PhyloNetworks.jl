@@ -248,6 +248,18 @@ function getchildedge(node::Node)
     return node.edge[ce_ind[1]]
 end
 
+function getchildrenedges(node::Node)
+    child_edges=Edge[]
+    for e in node.edge
+        if node==getparent(e)
+            push!(child_edges,e)
+        end
+    end
+    return child_edges
+end
+
+
+
 """
     getparent(edge)
     getparent(node)

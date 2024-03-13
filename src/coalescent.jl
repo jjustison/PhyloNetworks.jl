@@ -183,11 +183,11 @@ function decompILS(network::HybridNetwork,decomp_node::Node,hyb_sorting::Dict{In
     net=deepcopy(network)
     nd=net.node[nd_ind]
 
-    par=getParents(nd)[1] 
-    nmes=(x->x.name).(getChildren(nd))
+    par=getparents(nd)[1] 
+    nmes=(x->x.name).(getchildren(nd))
 
-    c_edge=getChildrenEdges(nd)[1].length   ##get the edge length of the first child, ignore other child edge lengths, assuming ultrametricy they should all be the same anyways
-    p_edge=getChildrenEdges(par)[1].length  ##get the edge length of the parent
+    c_edge=getchildrenedges(nd)[1].length   ##get the edge length of the first child, ignore other child edge lengths, assuming ultrametricy they should all be the same anyways
+    p_edge=getchildrenedges(par)[1].length  ##get the edge length of the parent
     elen=c_edge+p_edge ##This will be the edge length we assign to our coalesced edges
 
     removeClade!(net,nd,false)
@@ -250,7 +250,7 @@ function decompILS(network::HybridNetwork,decomp_node::Node,hyb_sorting::Dict{In
         hp=splitsHistories(length.(subset),tm) ##The number of coalescent histories that lead to these partitions
         ch=nHistories(length(nmes),length(nms_coal)) ##The total number of coalescent histories for i coalescing into j lineages
         treeprob=gij*(hp/ch)*prb ##TODO I'm concerned with underflow so make this deal with small numbers. perhaps switch to log probs
-        treeprob==0 && error("Likely underflow of the probability")
+        #treeprob==0 && println("Likely underflow of the probability")
         
         push!(decomposed_trees,decomp_net)
         push!(probs,treeprob)
@@ -269,7 +269,7 @@ function emptyHybSorting(net::HybridNetwork;type="name")
         hybs=net.hybrid
         for hyb in hybs
             hybsort[hyb.number]=Dict{Int64,Set{String}}()
-            for nd in getParents(hyb)
+            for nd in getparents(hyb)
             hybsort[hyb.number][nd.number]=Set{String}() 
             end
         end
@@ -278,7 +278,7 @@ function emptyHybSorting(net::HybridNetwork;type="name")
         hybs=net.hybrid
         for hyb in hybs
             hybsort[hyb.number]=Dict{Int64,Set{Node}}()
-            for nd in getParents(hyb)
+            for nd in getparents(hyb)
             hybsort[hyb.number][nd.number]=Set{Node}() 
             end
         end
@@ -303,7 +303,7 @@ function decompHyb(network::HybridNetwork,nd::Node,hyb_sorting::Dict{Int64, Dict
     lp_e=getMajorParentEdge(nd) 
     rp_e=getMinorParentEdge(nd)  
 
-    c_elen=getChildrenEdges(nd)[1].length   ##get the edge length of the first child, ignore other child edge lengths, they should be the same anyway
+    c_elen=getchildrenedges(nd)[1].length   ##get the edge length of the first child, ignore other child edge lengths, they should be the same anyway
     lp_elen=lp_e.length
     rp_elen=rp_e.length
 
@@ -443,7 +443,7 @@ function decompHyb(network::HybridNetwork,nd::Node,hyb_sorting::Dict{Int64, Dict
 
         ##Compute the probability of the tree
         treeprob=(r_gamma^length(rightgoing))*(l_gamma^length(leftgoing))*prb ##TODO I'm concerned with underflow so make this deal with small numbers. perhaps switch to log probs
-        treeprob==0 && error("Likely underflow of the probability")
+        #treeprob==0 && println("Likely underflow of the probability")
 
         push!(decomposed_trees,decomp_net)
         push!(probs,treeprob)
@@ -463,7 +463,7 @@ function networkDecomposition(net::HybridNetwork)
     ##determine how big of an unlabeledGenerate we need to run. it should be the size of max(numberLeaves(hyb_node) for all hyb_node in hyb_nodes)
     nleaves=Int64[]
     for hyb in net.hybrid
-        e=getChildEdge(hyb)
+        e=getchildedge(hyb)
         push!(nleaves,length(descendants(e)))
     end
     tm=unlabeledGenerate(maximum(nleaves))
@@ -492,12 +492,12 @@ function networkDecomposition(net::HybridNetwork)
     return fully_decomposed
 end
 
-function parentTreeProbs(net::HybridNetwork;scalar=1.0::Float64)
+function parentTreeProbs(net::HybridNetwork;pop=1.0::Float64)
     pts = parentTrees(net;report_hybsorting=true)
-
-    (x -> (x.length = x.length*scalar)).(net.edge) ##multiply all edgelengths by the scalar
+    old_e = (x -> (x.length)).(net.edge)
+    (x -> (x.length = x.length/pop)).(net.edge) ##multiply all edgelengths by the scalar
     decomp_pts = networkDecomposition(net)
-    (x -> (x.length = x.length/scalar)).(net.edge) ##Return all edgelengths back to the original
+    ((x,y) -> (x.length = y)).(net.edge,old_e) ##Return all edgelengths back to the original
 
     probs= repeat([0.0],length(pts))
 
@@ -509,5 +509,6 @@ function parentTreeProbs(net::HybridNetwork;scalar=1.0::Float64)
         probs[pt_ind] += decomp[2]
     end
 
-    return collect(zip( (x->x[1]).(pts),probs  ))
+    #return collect(zip( (x->x[1]).(pts),(x->x[2]).(pts),probs  ))
+    return collect(zip(probs,(x->x[2]).(pts)))
 end

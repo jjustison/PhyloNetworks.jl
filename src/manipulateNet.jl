@@ -772,7 +772,7 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
 
     for nd in multree.nodes_changed #traverse the nodes in reverse level order 
         if(nd.hybrid) ##only worry about hybrid nodes
-            parent_edges= getParentEdges(nd)
+            parent_edges= [getparentedge(nd),getparentedgeminor(nd)]
 
             ##update hyb sorting
             orig_clade=preorder(multree,nd)
@@ -795,7 +795,7 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 clade_edges=Edge[]
                 clade_leaves=Node[]
                 for clade_nd in clade_nodes
-                    append!(clade_edges,getChildrenEdges(clade_nd))
+                    append!(clade_edges,getchildrenedges(clade_nd))
                     clade_nd.leaf && push!(clade_leaves,clade_nd)
                 end
 
@@ -805,7 +805,7 @@ function mulTree(net::HybridNetwork,report_hybsorting=false::Bool)
                 push!(parent_node.edge,e_copy)
                 push!(clade_edges,e_copy)
 
-                kiddos=getChildrenEdges(nd_copy)
+                kiddos=getchildrenedges(nd_copy)
                 nd_copy.edge=Edge[]
                 append!(nd_copy.edge,kiddos)
                 push!(nd_copy.edge,e_copy)
@@ -950,7 +950,7 @@ function removeClade!(net::HybridNetwork,mrca::Node, keepMRCA::Bool)
             push!(delhybs,nd)
 
             ##we need to consider the case where one of the parents of a hybrid isn't in the deleted clade
-            for e in getParentEdges(nd) ##find the parents of the hybrid species and remove the edges that point to the hybrid
+            for e in [getparentedge(nd),getparentedgeminor(nd)] ##find the parents of the hybrid species and remove the edges that point to the hybrid
                 ## ^ really, this only needs to be done for the edges with a parent not in nds. oh well, we're slightly less efficient
                 par= getOtherNode(e,nd)
                 edgeind=(x-> x== e).(par.edge)
@@ -1009,13 +1009,13 @@ function levelorder!(net::HybridNetwork)
         while !isempty(currLevel)
             nd = pop!(currLevel)
             push!(net.nodes_changed,nd)
-            childs = getChildren(nd)
+            childs = getchildren(nd)
             for child in childs
                     if !child.hybrid #we are not at a hybrid node
                         push!(nextLevel,child)
                     else ##We are at a hybrid node
                         #In this case we only want to add the node if both of its parents are in levelOrder
-                        parents = getParents(child)
+                        parents = getparents(child)
                         if(setdiff(parents,net.nodes_changed) |> isempty)
                             push!(nextLevel,child)
                         end
@@ -1035,7 +1035,7 @@ function rankNodes!(net::HybridNetwork)
         if nd.leaf
             nd.number=1
         else
-            ranks= (x->x.number).(getChildren(nd))
+            ranks= (x->x.number).(getchildren(nd))
             nd.number=maximum(ranks)+1
         end
     end
