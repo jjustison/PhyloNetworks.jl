@@ -427,7 +427,11 @@ function vcvParent2(net::HybridNetwork, weights::Array{Float64,1})
 end
 
 
+
+
 function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64, Dict{Int64,Set{String}}}},1})
+
+
 
     ##TODO. write a case that deals with this instead of erroring out.
     any((x-> isempty(x.name)).(net.leaf)) && error("one of the leaves are named \"\". This is not allowed ")
@@ -435,8 +439,9 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
     ## Go thru edge by edge and keep track of all possible path combinations within that edge 
     ## Then build vcv edge by edge by adding covariance in that edge weighted by the weight of the path with the same(?) hyb_sorting
 
-    V = convert(DataFrame,zeros(length(net.leaf),length(net.leaf))) ##Make empty matrix for VCV 
-    tipnames=(x->x.name).(net.leaf)
+    V = DataFrame(zeros(length(net.leaf),length(net.leaf)),:auto) ##Make empty matrix for VCV 
+    preorder!(net) ##Make sure that the VCV order matches the tip labels order
+    tipnames=tipLabels(net)
     rename!(V, map(Symbol, tipnames))
     V_map = Dict{String,Int64}(collect(zip(tipnames,(1:length(tipnames)))))
 
@@ -448,13 +453,14 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
     #end
 
     #Doing this in a way such that I don't need new objects. But ew on this Dictionary
+    ## TODO. Make a named tuple for easier to understand code
     edge_paths = Dict{
         Int64, #This will have the edge numbers so we can find the Nodes we're interested in
         Array{Tuple{ ## For a given Node
             ##These things are vectors because each element will be one of the paths for that given node
             Set{String}, #The set of names for that path
             Dict{Int64, Dict{Int64,Set{String}}}, ## The_hyb sorting. The first Int is the hyb node number while the second is the parent of hyb node
-            Array{Int64,1} # The indices with all compatible parent trees
+            Set{Int64} # The indices with all compatible parent trees
         },1}
     }()
 
@@ -463,39 +469,52 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
     weight_inds= Set(1:length(weights))
 
     for nd in reverse(net.nodes_changed) ##go thru nodes in reverse level order, i.e. start at the tips.        
-        
-        
+
+        #println("we are at node $(nd.number)")
         if nd.leaf ##If the node is a leaf...
             ##Add the the parent edge to edge_paths
             e = getparentedge(nd)
 
 
-            push!(edge_paths[e.number],
-                (
-                Set{String}([nd.name]),
-                Dict{Int64, Dict{Int64,Set{String}}}(), ##Empty Hyb_sorting
-                weight_inds ##Start with all weight
-                )
-            )
+            edge_paths[e.number]=[(
+                    Set{String}([nd.name]),
+                    Dict{Int64, Dict{Int64,Set{String}}}(), ##Empty Hyb_sorting
+                    weight_inds ##Start with all weight
+                )]
         else ## Get the child edges and add the covariances
-            child_edges = getChildrenEdges(nd)
-            child_nds= (x-> (x.isChild1 && return(x.edge[1])) || return(x.edge[2]) ).(child_edges)
+            child_edges = getchildrenedges(nd)
+            #child_nds= (x-> (x.isChild1 && return(x.edge[1])) || return(x.edge[2]) ).(child_edges)
 
             ##For each child node of the node of interest
             for child_ind in 1:length(child_edges)
                 child_e =child_edges[child_ind]
-                child_nd=child_nds[child_ind]
+                #child_nd=child_nds[child_ind]
 
                 path_set = edge_paths[child_e.number]
                 ##go thru each path and add covariances
-                for path_ind in (1:length(path_set)) ##For each path...
-                    path= path_set[path_ind]
+                leaf_wts = Dict{String,Float64}() ##Store the total weight for each taxon across all paths for that edge
+                for path in path_set ##For each path...
+                    wt= sum((x-> ((weights[x])[1])).(path[3])) ##The total weight of all parent trees consistent with that path
+                    for taxon1 in path[1]
+                        get!(leaf_wts,taxon1,0) ## Make a dictionary entry if not present
+                        leaf_wts[taxon1]+=wt
 
-                    wt= sum((x-> ((weights[x])[1])).(path[3]))
-                    for taxon1 in path[1], taxon2 in path[1] ##add covariances
-                        (taxon1!=taxon2) && (V[V_map[taxon1],taxon2]+=child_e.length * wt)
+
+                        for taxon2 in path[1] 
+                            ##(taxon1!=taxon2) && (V[V_map[taxon1],taxon2]+=child_e.length * wt) ## Add the covariances
+                            (V[V_map[taxon1],taxon2]+=child_e.length * wt) ## Add the covariances
+                        end
                     end
                 end
+
+                #for (taxon,leaf_wt) in leaf_wts ## go thru leaf_wts and add the variances
+                #    (V[V_map[taxon],taxon]+=child_e.length * (leaf_wt^2))
+                #end
+
+                ##add the variances
+
+
+
             end
 
             ## update edge_paths
@@ -506,12 +525,26 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
                 paths = edge_paths[child_e.number]
 
                 par_nds = getparents(nd)
-                par_es= Array{Edge,1}()
-                for par_nd in par_nds ## Get the edges that lead to each parental node 
-                    edges = getChildrenEdges(par_nd)
-                    (x-> getchild(x)==nd && push!(par_e,x)).(edges)
-                end
-                length(par_e) != length(par_nd) && error("There is a mismatch between the number of parental nodes and edges")
+                par_e= [getparentedge(nd),getparentedgeminor(nd)]
+
+                ##Make an empty edge_path for each of the parent edges
+                edge_paths[par_e[1].number]=Array{
+                    Tuple{ 
+                        Set{String},
+                        Dict{Int64, Dict{Int64,Set{String}}},
+                        Set{Int64}
+                    },
+                1}()
+                edge_paths[par_e[2].number]=Array{
+                    Tuple{ 
+                        Set{String},
+                        Dict{Int64, Dict{Int64,Set{String}}},
+                        Set{Int64}
+                    },
+                1}()
+
+
+                length(par_e) != length(par_nds) && error("There is a mismatch between the number of parental nodes and edges")
 
                 for path in paths ##For each path...
                     taxa = path[1]
@@ -519,16 +552,20 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
                     ##get all subsets of the taxa, then we can split them into going left and right
                     taxa_sets = (x -> Set(x)).(collect(combinations(collect(taxa))))
                     push!(taxa_sets,Set()) ##Add the empty set as nothing could go in a direction
-                    taxa_set_compliments = (x-> setdiff(taxa,x)).(taxa_sets)
 
-                    for taxa_ind in 1:length(taxa_sets) ## For each taxa set
+                    for taxa_set in taxa_sets ## For each taxa set
+
+                        taxa_set_compliment = setdiff(taxa,taxa_set)
                         ## For these taxa sets there are two possible paths it could create... they go left or right
                         
                         ##Have taxa set go 'left'. i.e. par_nd[1]
                         ##Make the hyb_sorting that for them going left
-                        h_sorting = edge_paths[child_e.number]
-                        h_sorting[nd.number][par_nds[1].number]=taxa_sets[taxa_ind]
-                        h_sorting[nd.number][par_nds[2].number]=taxa_set_compliments[taxa_ind]
+                        h_sorting = deepcopy(path[2]) ##inherit the hyb sorting of the path
+                        hyb_nd_dict = Dict{Int64,Set{String}}(
+                            par_nds[1].number => taxa_set,
+                            par_nds[2].number => taxa_set_compliment
+                        )
+                        h_sorting[nd.number]=hyb_nd_dict
 
                         compat_trees=Array{Int64,1}()
                         for tree_ind in path[3] ##Check compatability with the parent trees
@@ -536,47 +573,62 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
                             ##The new path is compatible with the parent tree if they have the same hyb_sorting
                             (pt_hyb_sort[nd.number] == h_sorting[nd.number]) && push!(compat_trees,tree_ind)
                         end
+                        compat_trees=Set(compat_trees)
 
                         ##make the edge_path going left
-                        push!(edge_paths[par_e[1]],
-                            (taxa_sets[taxa_ind],
-                            h_sorting,
-                            compat_trees)
+                        push!(edge_paths[par_e[1].number],(
+                                taxa_set,
+                                h_sorting,
+                                compat_trees
+                            )
                         )
                         ##make the edge_path going right
-                        push!(edge_paths[par_e[2]],
-                        (taxa_set_compliments[taxa_ind],
-                        h_sorting,
-                        compat_trees)
+                        push!(edge_paths[par_e[2].number],(
+                                taxa_set_compliment,
+                                h_sorting,
+                                compat_trees
+                            )
                         )
                     end
                 end
 
 
             else ## We are at a tree node
+                net.node[net.root].number == nd.number && break
+
+                par_e=getparentedge(nd)
+                ##Make an empty edge_path for the parent edge
+                edge_paths[par_e.number]=Array{
+                    Tuple{ 
+                        Set{String},
+                        Dict{Int64, Dict{Int64,Set{String}}},
+                        Set{Int64}
+                    },
+                1}()
+
+
 
                 ##Tree nodes have are in-degree 1 and out-degree 2
                 ##We take the two child edges and combine them to make the parent edge edge_path
                 ## we need to do this for each combination of edge_paths for each child edges
                 ##We also need to check whether the two edge_paths are compatible with one another
-                for edge_path1 in e_p[child_edges[1].number], edge_path2 in e_p[child.eges[2].number]
+                for edge_path1 in edge_paths[child_edges[1].number], edge_path2 in edge_paths[child_edges[2].number]
                     ##Look at the setdiffs of each name set
                     ##If they have overlapping names then they are incompatible and can't be combined
                     comb_names=union(edge_path1[1],edge_path2[1])
                     ##Same length means disjoint sets
-                    (length(comb_names) != (length(edge_path1[1])+edge_path2[1])) && break
+                    (length(comb_names) != (length(edge_path1[1])+length(edge_path2[1]))) && (continue)
 
 
                     ##Combine the valid parent tree sets for weights
                     comb_weight_inds=intersect(edge_path1[3],edge_path2[3])
-                    isempty(comb_weight_inds) && break ## if there are no more valid parent trees then these can't be combined
-
-
+                    isempty(comb_weight_inds) && (continue) ## if there are no more valid parent trees then these can't be combined
+                                      
                     ##Look at the hyb_sortings and ensure they are compatibile 
                     ## TODO TBH I'm not sure this is check is nessecary given the previous check but should look into it for optimization
                     comb_hyb_sort = Dict{Int64, Dict{Int64,Set{String}}}() ##start empty and build. ##Slow since we rebuild from scratch. TODO optimize
-                    keys1=keys(edge_path1)
-                    keys2=keys(edge_path2)
+                    keys1=keys(edge_path1[2])
+                    keys2=keys(edge_path2[2])
                     all_keys= union(keys1,keys2) ##get all the nodes involved in hyb_sorting for the two path sets
                     for key in all_keys
                         #check which hyb_sortings have the key
@@ -586,31 +638,30 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
                         #Case 1: the node is in both hyb_sortings
                         if in1 && in2
                             ##They need to have the same hyb sorting at that node to be compatibile
-                            if edge_path1[key]==edge_path2[key]
-                                comb_hyb_sort[key]=edge_path[key]
+                            if edge_path1[2][key]==edge_path2[2][key]
+                                comb_hyb_sort[key]=edge_path2[2][key]
                             else
-                                valid_combine=false
-                                break ##No need to keep looking at the keys if we have an invalid combine
+                                error("we hit an invalid combine")
+                                continue ##No need to keep looking at the keys if we have an invalid combine
                             end
 
                         end
-                        !valid_combine && break 
 
                         #Case 2: The node is only in one of the hyb_sortings. add the hyb_sorting from the path that does have it
-                        (in1 && !in2) && (comb_hyb_sort[key] = edge_path1[key]) ## in edge_path1
-                        (in2 && !in1) && (comb_hyb_sort[key] = edge_path2[key]) ## in edge_path2
+                        (in1 && !in2) && (comb_hyb_sort[key] = edge_path1[2][key]) ## in edge_path1
+                        (in2 && !in1) && (comb_hyb_sort[key] = edge_path2[2][key]) ## in edge_path2
                     end
 
-                    if valid_combine
-                            ##Combine hyb_paths
-                        push!(edge_paths[e.number],
-                            (
-                                comb_names,
-                                comb_hyb_sort,
-                                comb_weight_inds
-                            ) 
-                        )
-                    end
+
+                    #Combine hyb_paths
+                    push!(edge_paths[par_e.number],(
+                            comb_names,
+                            comb_hyb_sort,
+                            comb_weight_inds
+                        ) 
+                    )
+                        
+
                 end
 
             end
@@ -620,6 +671,7 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
 
 
     end
+    
     return(V)
 end
 
@@ -1920,6 +1972,15 @@ end
 ScalingHybrid() = ScalingHybrid(1.0)
 evomodelname(::ScalingHybrid) = "Lambda's scaling hybrid"
 
+
+struct BM_VCV <: ContinuousTraitEM
+    lambda::Float64
+end
+BM_VCV() = BM_VCV(1)
+evomodelname(::BM_VCV) = "Brownian Motion with a given variance covariance matrix"
+
+
+
 ###############################################################################
 ##     phylogenetic network regression
 ###############################################################################
@@ -2066,15 +2127,37 @@ function phylolm(X::Matrix, Y::Vector, net::HybridNetwork,
                 fixedValue=missing::Union{Real,Missing},
                 withinspecies_var::Bool=false,
                 counts::Union{Nothing, Vector}=nothing,
-                ySD::Union{Nothing, Vector}=nothing)
+                ySD::Union{Nothing, Vector}=nothing,
+                VCV::Union{Matrix,Nothing}=nothing)
     if withinspecies_var
         phylolm_wsp(model, X,Y,net, reml; nonmissing=nonmissing, ind=ind,
                     counts=counts, ySD=ySD)
+    elseif !isnothing(VCV)
+        phylolm(model, X,Y,net, reml; nonmissing=nonmissing, ind=ind,
+        startingValue=startingValue, fixedValue=fixedValue,VCV=VCV)
     else
         phylolm(model, X,Y,net, reml; nonmissing=nonmissing, ind=ind,
                 startingValue=startingValue, fixedValue=fixedValue)
     end
 end
+
+
+function phylolm(::BM_VCV, X::Matrix, Y::Vector, net::HybridNetwork,reml::Bool;
+    nonmissing=trues(length(Y))::BitArray{1},
+    ind=[0]::Vector{Int},
+    VCV::Matrix,
+    kwargs...)
+
+    V=sharedPathMatrix(net)
+  
+
+linmod, Vy, RL, logdetVy = pgls_tips(X,Y,VCV; nonmissing=nonmissing, ind=ind)
+return PhyloNetworkLinearModel(linmod, V, Vy, RL, Y, X,
+    logdetVy, reml, ind, nonmissing, BM())
+end
+
+
+
 
 function phylolm(::BM, X::Matrix, Y::Vector, net::HybridNetwork,reml::Bool;
                 nonmissing=trues(length(Y))::BitArray{1},
@@ -2083,6 +2166,8 @@ function phylolm(::BM, X::Matrix, Y::Vector, net::HybridNetwork,reml::Bool;
     # BM variance covariance:
     # V_ij = expected shared time for independent genes in i & j
     V = sharedPathMatrix(net)
+
+
     linmod, Vy, RL, logdetVy = pgls(X,Y,V; nonmissing=nonmissing, ind=ind)
     return PhyloNetworkLinearModel(linmod, V, Vy, RL, Y, X,
                 logdetVy, reml, ind, nonmissing, BM())
@@ -2128,8 +2213,11 @@ end
 function pgls(X::Matrix, Y::Vector, V::MatrixTopologicalOrder;
         nonmissing=trues(length(Y))::BitArray{1}, # which tips are not missing?
         ind=[0]::Vector{Int})
+
+        
     # Extract tips matrix
     Vy = V[:Tips]
+    # Vanilla BM using covariance V. used for other models: V calculated beforehand
 
     # Re-order if necessary
     if (ind != [0]) Vy = Vy[ind, ind] end
@@ -2141,6 +2229,29 @@ function pgls(X::Matrix, Y::Vector, V::MatrixTopologicalOrder;
     # Fit with GLM.lm, and return quantities needed downstream
     return lm(RL\X, RL\Y), Vy, RL, logdet(R)
 end
+
+
+#Used for other models with on the tips V calculated beforehand.
+#In this case, V is a DataFrame object and the vcv matrix consists of only the tips
+function pgls_tips(X::Matrix, Y::Vector, V::Matrix;
+    nonmissing=trues(length(Y))::BitArray{1}, # which tips are not missing?
+    ind=[0]::Vector{Int})
+
+
+Vy=Matrix(V)
+
+# Re-order if necessary
+if (ind != [0]) Vy = Vy[ind, ind] end
+# Keep only not missing values
+Vy = Vy[nonmissing, nonmissing]
+# Cholesky decomposition
+R = cholesky(Vy)
+RL = R.L
+# Fit with GLM.lm, and return quantities needed downstream
+return lm(RL\X, RL\Y), Vy, RL, logdet(R)
+end
+
+
 
 function phyloParentlm_BM(X::Matrix,
     Y::Vector,
@@ -2763,7 +2874,9 @@ function phylolm(f::StatsModels.FormulaTerm,
                 startingValue::Real=0.5,
                 fixedValue::Union{Real,Missing}=missing,
                 withinspecies_var::Bool=false,
-                y_mean_std::Bool=false)
+                y_mean_std::Bool=false,
+                VCV::Union{Matrix,Nothing}=nothing
+                )
     # Match the tips names: make sure that the data provided by the user will
     # be in the same order as the ordered tips in matrix V.
     preorder!(net)
@@ -2837,83 +2950,18 @@ function phylolm(f::StatsModels.FormulaTerm,
         error("within-species variation is not implemented for non-BM models")
     modeldic = Dict("BM" => BM(),
                     "lambda" => PagelLambda(),
-                    "scalingHybrid" => ScalingHybrid())
+                    "scalingHybrid" => ScalingHybrid(),
+                    "BMVCV" => BM_VCV())
     haskey(modeldic, model) || error("phylolm is not defined for model $model.")
     modelobj = modeldic[model]
 
     
     res = phylolm(mm.m, Y, net, modelobj; reml=reml, nonmissing=nonmissing, ind=ind,
                   startingValue=startingValue, fixedValue=fixedValue,
-                  withinspecies_var=withinspecies_var, counts=counts, ySD=ySD)
+                  withinspecies_var=withinspecies_var, counts=counts, ySD=ySD,VCV=VCV)
     res.formula = f
     return res
 end
-
-
-function phyloParentlm(f::StatsModels.FormulaTerm,
-    fr::AbstractDataFrame,
-    net::HybridNetwork,
-    VCV::DataFrame;
-    
-    model="BM"::AbstractString,
-    no_names=false::Bool,
-    ftolRel=fRelTr::AbstractFloat,
-    xtolRel=xRelTr::AbstractFloat,
-    ftolAbs=fAbsTr::AbstractFloat,
-    xtolAbs=xAbsTr::AbstractFloat,
-    startingValue=0.5::Real,
-    fixedValue=missing::Union{Real,Missing})
-# Match the tips names: make sure that the data provided by the user will
-# be in the same order as the ordered tips in matrix V.
-preorder!(net)
-if no_names # The names should not be taken into account.
-ind = [0]
-@info """As requested (no_names=true), I am ignoring the tips names
-in the network and in the dataframe."""
-elseif (any(tipLabels(net) == "") || !any(DataFrames.names(fr) .== :tipNames))
-if (any(tipLabels(net) == "") && !any(DataFrames.names(fr) .== :tipNames))
-error("""The network provided has no tip names, and the input dataframe has
-no column labelled tipNames, so I can't match the data on the network
-unambiguously. If you are sure that the tips of the network are in the
-same order as the values of the dataframe provided, then please re-run
-this function with argument no_name=true.""")
-end
-if any(tipLabels(net) == "")
-error("""The network provided has no tip names, so I can't match the data
-on the network unambiguously. If you are sure that the tips of the
-network are in the same order as the values of the dataframe provided,
-then please re-run this function with argument no_name=true.""")
-end
-if !any(DataFrames.names(fr) .== :tipNames)
-error("""The input dataframe has no column labelled tipNames, so I can't
-match the data on the network unambiguously. If you are sure that the
-tips of the network are in the same order as the values of the dataframe
-provided, then please re-run this function with argument no_name=true.""")
-end
-else
-#        ind = indexin(V.tipNames, fr[:tipNames])
-ind = indexin(fr[!,:tipNames], tipLabels(net))
-if any(ind == 0) || length(unique(ind)) != length(ind)
-error("""Tips names of the network and names provided in column tipNames
-of the dataframe do not match.""")
-end
-#   fr = fr[ind, :]
-end
-# Find the regression matrix and response vector
-data, nonmissing = StatsModels.missing_omit(StatsModels.columntable(fr), f)
-sch = StatsModels.schema(f, data)
-f = StatsModels.apply_schema(f, sch, PhyloNetworkLinearModel)
-mf = ModelFrame(f, sch, data, PhyloNetworkLinearModel)
-mm = StatsModels.ModelMatrix(mf)
-Y = StatsModels.response(mf)
-# Y = convert(Vector{Float64}, StatsModels.response(mf))
-# Y, pred = StatsModels.modelcols(f, fr)
-StatsModels.TableRegressionModel(
-phyloParentlm(mm.m, Y,net, VCV; nonmissing=nonmissing, model=model, ind=ind,
-   startingValue=startingValue, fixedValue=fixedValue),
-mf, mm)
-end
-
 
 
 
