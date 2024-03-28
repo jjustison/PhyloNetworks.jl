@@ -324,108 +324,6 @@ function vcv(net::HybridNetwork;
     return(Cd)
 end
 
-#= function vcvParent(net::HybridNetwork,weights::Array{Float64,1})
-    pts=parentTrees(net;resetNodes=false) 
-    
-    tipnums=(x->x.number).(net.leaf)
-    
-    edgenums=(x->x.number).(net.edge)
-    edgelengths=(x->x.length).(net.edge)
-    edgelen_dict=Dict(edgenums .=> edgelengths)
-
-    nummaps=Dict{Int64,Int64}[]
-    pt_descs=MatrixTopologicalOrder[]
-    for p in pts ##For each parent tree...
-        
-        ##reset the node numbers and track the old to new number mappings
-        oldnum= (x->x.number).(p.leaf)
-        resetNodeNumbers!(p)
-        newnum= (x->x.number).(p.leaf)
-        oldnewmap=Dict(oldnum .=> newnum)
-        push!(nummaps,oldnewmap)
-        
-        ##create descendence matrix for each parent tree and set nonzero values to 1
-        d=descendenceMatrix(p)
-        d.V[d.V .> 0] .= 1
-        push!(pt_descs,d)
-    end
-
-    vcv=zeros(length(tipnums),length(tipnums))
-
-    e_cntrbtns=Dict{Int64,Dict{Int64,Float64}}()
-
-    
-    ##Compute edge contributions for each tip
-    for i in 1:length(tipnums)
-        t=tipnums[i] 
-        
-        edgeweights=Dict(edgenums.=>0.0)
-        for p in 1:length(pts) ##Get the contribution of the edges by each parent tree 
-            desc=pt_descs[p]
-            pt=pts[p]
-            weight=weights[p]
-            oldnewmap=nummaps[p]
-
-            tip=oldnewmap[t]
-
-            tip_ind=findfirst(x->x==tip, desc.tipNumbers) ##get row index of the tip we're interested in
-            r1=Bool.(desc[:Tips][tip_ind,:]) ##get the row
-                
-            node_nos=desc.nodeNumbersTopOrder[r1]
-            for n in pt.node 
-                if n.number in node_nos ##If the node number is in our list then we want to add weight to the parent edge in our edgeweights
-                    pe= getParentEdges(n)
-                    length(pe)==1 && (edgeweights[pe[1].number]+=weight); ## length(pe) should equal 1 at every node except the root
-                end
-            end 
-        end
-
-        for k in keys(edgeweights)
-            edgeweights[k]^=1
-            #edgeweights[k]*=edgelen_dict[k]
-        end
-
-        e_cntrbtns[t]=edgeweights
-    end
-
-    #Now Compute the vcv matrix element by element
-    for i in 1:length(tipnums)
-        tip1=tipnums[i]
-        for j in 1:length(tipnums)
-            tip2=tipnums[j]
-
-            edges=Float64[]
-            for k in edgenums
-                push!(edges,(e_cntrbtns[tip1][k]*e_cntrbtns[tip2][k])*edgelen_dict[k]) ##Cov(aX,bY)= ab*Cov(X,Y) and when X=Y we have (a^2)*Var(X)
-                #push!(edges,min(e_cntrbtns[tip1][k],e_cntrbtns[tip2][k]))
-            end
-
-            vcv[i,j]=sum(edges)
-
-        end
-    end
-
-    tipnames=(x->x.name).(net.leaf)
-    Cd = convert(DataFrame, vcv)
-    names!(Cd, map(Symbol, tipnames))
-
-return Cd
-
-end =#
-
-function vcvParent2(net::HybridNetwork, weights::Array{Float64,1})
-
-    ##Data Structure that will hold all the paths each tip could take from tip to root
-    #struct hyb_path
-    #    tip::String
-    #    hyb_sorting::tuple{Int64,Int64}[] ##This is how we allign the paths to a specific parent tree 
-    #    edges::Edge
-    #end
-
-    
-
-end
-
 
 
 
@@ -524,8 +422,9 @@ function vcvParent3(net::HybridNetwork, weights::Array{Tuple{Float64,Dict{Int64,
                 child_e = getchildedge(nd)
                 paths = edge_paths[child_e.number]
 
-                par_nds = getparents(nd)
                 par_e= [getparentedge(nd),getparentedgeminor(nd)]
+                par_nds = (x-> x.node[x.isChild1+1]).(par_e)
+                
 
                 ##Make an empty edge_path for each of the parent edges
                 edge_paths[par_e[1].number]=Array{

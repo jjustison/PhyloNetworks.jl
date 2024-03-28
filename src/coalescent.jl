@@ -263,6 +263,11 @@ function decompILS(network::HybridNetwork,decomp_node::Node,hyb_sorting::Dict{In
     return collect(zip(decomposed_trees,probs,hybsort))
 end
 
+
+
+#### TODO The hybosrtings currently make hyb node dictionaries that point to parent node numbers
+#### This is potentially problematic if a hybrid node has the same parents, leading to ambiguity.
+#### Solution: Change to point to edge numbers instead and pray it doesn't break downstream things
 function emptyHybSorting(net::HybridNetwork;type="name")
     if type == "name"
         hybsort= Dict{Int64, Dict{Int64,Set{String}}}()
